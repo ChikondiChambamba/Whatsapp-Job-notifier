@@ -324,8 +324,24 @@ export function ProfileEditor({
             onChange={(email) => update({ alerts: { ...profile.alerts, email } })}
             label="Email"
           />
-          <span>{profile.alerts.email ? 'Email me each match' : 'Email off: matches are only listed in this app'}</span>
+          <span>{profile.alerts.email ? 'Email me each match' : 'No email'}</span>
         </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <Switch
+            checked={profile.alerts.whatsappSelf}
+            onChange={(whatsappSelf) => update({ alerts: { ...profile.alerts, whatsappSelf } })}
+            label="WhatsApp message"
+          />
+          <span>
+            {profile.alerts.whatsappSelf ? 'Send me a WhatsApp message for each match' : 'No WhatsApp message'}
+            <span className="field-help">
+              Sent to the chat chosen in <a href="#/settings">Settings</a>.
+            </span>
+          </span>
+        </div>
+        {!profile.alerts.email && !profile.alerts.whatsappSelf && (
+          <p className="field-help">Matches will only be listed in this app.</p>
+        )}
       </section>
 
       <TryIt profile={profile} aiConfigured={aiConfigured} />

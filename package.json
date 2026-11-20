@@ -59,6 +59,8 @@
   "build": {
     "appId": "com.whatsappalerts.app",
     "productName": "WhatsApp Alerts",
+    "electronDist": "node_modules/electron/dist",
+    "electronVersion": "45.4.1",
     "directories": {
       "output": "release",
       "buildResources": "assets"

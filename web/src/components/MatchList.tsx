@@ -2,6 +2,13 @@ import { useState } from 'react';
 import { collapseBlankLines, dateTime, timeAgo } from '../format';
 import type { Match } from '../types';
 
+const WHATSAPP: Record<NonNullable<Match['waState']>, { label: string; tone: string }> = {
+  sent: { label: 'WhatsApp sent', tone: 'ok' },
+  pending: { label: 'WhatsApp waiting', tone: 'warn' },
+  failed: { label: 'WhatsApp failed', tone: 'danger' },
+  expired: { label: 'WhatsApp too old', tone: '' },
+};
+
 const STATUS: Record<Match['status'], { label: string; tone: string }> = {
   sent: { label: 'Emailed', tone: 'ok' },
   pending: { label: 'Waiting to send', tone: 'warn' },
@@ -49,8 +56,15 @@ export function MatchList({ matches }: { matches: Match[] | undefined }) {
               </p>
             )}
             <div className="spread small" style={{ marginTop: 4 }}>
-              <span className={`badge ${status.tone}`} title={match.lastError ?? undefined}>
-                {status.label}
+              <span className="row" style={{ gap: 6 }}>
+                <span className={`badge ${status.tone}`} title={match.lastError ?? undefined}>
+                  {status.label}
+                </span>
+                {match.waState && (
+                  <span className={`badge ${WHATSAPP[match.waState].tone}`} title={match.waError ?? undefined}>
+                    {WHATSAPP[match.waState].label}
+                  </span>
+                )}
               </span>
               <button type="button" className="btn link small" onClick={() => setOpen(expanded ? null : match.id)}>
                 {expanded ? 'Show less' : 'Show full message'}

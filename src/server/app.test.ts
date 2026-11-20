@@ -28,6 +28,8 @@ async function setup(whatsappOverrides: Partial<WhatsAppControl> = {}) {
     listSeenChannels: async () => [],
     lookupChannelLink: async () => ({ jid: '99@newsletter', name: 'Tech Jobs' }),
     logout: vi.fn(async () => undefined),
+    sendAlertText: vi.fn(async () => undefined),
+    numberHasWhatsApp: vi.fn(async (number: string) => number !== '265000000000'),
     ...whatsappOverrides,
   };
   const sendTestEmail = vi.fn(async () => undefined);
@@ -277,5 +279,36 @@ describe('API', () => {
     });
     expect(status).toBe(400);
     expect(body.error).toMatch(/Describe what you want/);
+  });
+
+  it('saves the WhatsApp alert target, checking the number is on WhatsApp', async () => {
+    const { call, settings, whatsapp } = await setup();
+
+    expect((await call('GET', '/api/settings/whatsapp-alerts')).body).toEqual({ target: 'self' });
+
+    const saved = await call('PUT', '/api/settings/whatsapp-alerts', { target: 'number', number: '+265 99 123 4567' });
+    expect(saved.body).toEqual({ target: 'number', number: '265991234567' });
+
+    const missing = await call('PUT', '/api/settings/whatsapp-alerts', { target: 'number', number: '265000000000' });
+    expect(missing.status).toBe(400);
+    expect(settings.getWhatsAppAlertSettings().number).toBe('265991234567');
+
+    const tooShort = await call('PUT', '/api/settings/whatsapp-alerts', { target: 'number', number: '123' });
+    expect(tooShort.status).toBe(400);
+
+    await call('PUT', '/api/settings/whatsapp-alerts', { target: 'self' });
+    expect(settings.getWhatsAppAlertSettings()).toEqual({ target: 'self' });
+
+    expect((await call('POST', '/api/settings/whatsapp-alerts/test', {})).body).toEqual({ ok: true });
+    expect(whatsapp.sendAlertText).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a test message failure while WhatsApp is offline', async () => {
+    const { call } = await setup({
+      sendAlertText: async () => {
+        throw new NotConnectedError();
+      },
+    });
+    expect((await call('POST', '/api/settings/whatsapp-alerts/test', {})).status).toBe(409);
   });
 });

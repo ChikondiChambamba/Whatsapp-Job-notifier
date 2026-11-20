@@ -102,6 +102,8 @@ export interface Match {
   matchedCategories: string[];
   origin: 'live' | 'catchup';
   status: 'review' | 'pending' | 'sent' | 'failed' | 'expired' | 'rejected' | 'in_app';
+  waState: 'pending' | 'sent' | 'failed' | 'expired' | null;
+  waError: string | null;
   aiRelevant: boolean | null;
   aiReason: string | null;
   lastError: string | null;

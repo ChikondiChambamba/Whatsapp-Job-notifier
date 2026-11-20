@@ -10,5 +10,8 @@ services:
     volumes:
       - ./auth_session:/app/auth_session
       - ./data:/app/data
+      - ./logs:/app/logs
+    # Needed on the first run so the WhatsApp QR code prints to the terminal.
+    # Docker users can also scan it at http://127.0.0.1:4000.
     stdin_open: true
     tty: true

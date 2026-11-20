@@ -3,6 +3,7 @@ import { api } from '../api';
 import { AiForm } from '../components/AiForm';
 import { EmailForm } from '../components/EmailForm';
 import { QrPanel } from '../components/QrPanel';
+import { WhatsAppAlertsForm } from '../components/WhatsAppAlertsForm';
 import { errorText, timeAgo } from '../format';
 import type { AppStatus } from '../types';
 
@@ -38,6 +39,11 @@ export function Settings({ status, refresh }: { status: AppStatus | undefined; r
       <section className="card">
         <h2>Email alerts</h2>
         <EmailForm />
+      </section>
+
+      <section className="card">
+        <h2>WhatsApp alerts</h2>
+        <WhatsAppAlertsForm connected={whatsapp?.state === 'connected'} />
       </section>
 
       <section className="card">

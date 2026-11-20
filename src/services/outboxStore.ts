@@ -11,6 +11,11 @@ export type OutboxOrigin = 'live' | 'catchup';
  */
 export type OutboxStatus = 'review' | 'pending' | 'sent' | 'failed' | 'expired' | 'rejected' | 'in_app';
 
+/** WhatsApp delivery state; null when the alert's profile does not use WhatsApp. */
+export type WhatsAppState = 'pending' | 'sent' | 'failed' | 'expired';
+
+const MAX_WHATSAPP_ATTEMPTS = 5;
+
 export interface QueueAlertInput {
   messageId: string;
   profileId: string;
@@ -49,6 +54,10 @@ export interface OutboxRow {
   statsEventId: number | null;
   aiRelevant: boolean | null;
   aiReason: string | null;
+  waState: WhatsAppState | null;
+  waAttempts: number;
+  waError: string | null;
+  waSentAt: number | null;
 }
 
 interface DbOutboxRow {
@@ -72,6 +81,10 @@ interface DbOutboxRow {
   stats_event_id: number | null;
   ai_relevant: number | null;
   ai_reason: string | null;
+  wa_state: WhatsAppState | null;
+  wa_attempts: number;
+  wa_error: string | null;
+  wa_sent_at: number | null;
 }
 
 interface CountRow {
@@ -190,6 +203,54 @@ export class OutboxStore {
       ?.attempts ?? 0;
   }
 
+  /** Flag alerts for WhatsApp delivery (only those not flagged before). */
+  markWhatsAppPending(ids: number[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    this.db
+      .prepare(
+        `UPDATE alert_outbox SET wa_state = 'pending'
+         WHERE wa_state IS NULL AND id IN (${ids.map(() => '?').join(', ')})`,
+      )
+      .run(...ids);
+  }
+
+  whatsappPendingRows(): OutboxRow[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM alert_outbox WHERE wa_state = 'pending' ORDER BY posted_at ASC, id ASC`)
+      .all() as DbOutboxRow[];
+    return rows.map(mapRow);
+  }
+
+  markWhatsAppSent(ids: number[], sentAt = Date.now()): void {
+    if (ids.length === 0) {
+      return;
+    }
+    this.db
+      .prepare(
+        `UPDATE alert_outbox SET wa_state = 'sent', wa_sent_at = ?, wa_error = NULL
+         WHERE id IN (${ids.map(() => '?').join(', ')})`,
+      )
+      .run(sentAt, ...ids);
+  }
+
+  markWhatsAppFailure(id: number, error: string): void {
+    this.db
+      .prepare(
+        `UPDATE alert_outbox
+         SET wa_attempts = wa_attempts + 1,
+             wa_error = ?,
+             wa_state = CASE WHEN wa_attempts + 1 >= ? THEN 'failed' ELSE 'pending' END
+         WHERE id = ?`,
+      )
+      .run(error, MAX_WHATSAPP_ATTEMPTS, id);
+  }
+
+  markWhatsAppExpired(id: number): void {
+    this.db.prepare(`UPDATE alert_outbox SET wa_state = 'expired' WHERE id = ?`).run(id);
+  }
+
   markInApp(ids: number[]): void {
     if (ids.length === 0) {
       return;
@@ -297,6 +358,10 @@ function mapRow(row: DbOutboxRow): OutboxRow {
     statsEventId: row.stats_event_id,
     aiRelevant: row.ai_relevant === null ? null : row.ai_relevant === 1,
     aiReason: row.ai_reason,
+    waState: row.wa_state,
+    waAttempts: row.wa_attempts,
+    waError: row.wa_error,
+    waSentAt: row.wa_sent_at,
   };
 }
 

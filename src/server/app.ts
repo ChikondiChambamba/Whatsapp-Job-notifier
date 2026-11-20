@@ -12,6 +12,7 @@ import type { RecentMessagesStore } from '../services/recentMessagesStore.js';
 import {
   aiSettingsSchema,
   emailSettingsSchema,
+  whatsappAlertSettingsSchema,
   type EmailSettings,
   type SettingsStore,
 } from '../services/settingsStore.js';
@@ -33,6 +34,8 @@ export interface WhatsAppControl {
   listSeenChannels(): Promise<ChannelInfo[]>;
   lookupChannelLink(link: string): Promise<ChannelInfo | null>;
   logout(): Promise<void>;
+  sendAlertText(text: string): Promise<void>;
+  numberHasWhatsApp(number: string): Promise<boolean>;
 }
 
 export interface AppDeps {
@@ -312,6 +315,8 @@ export function createApp(deps: AppDeps): express.Express {
         matchedCategories: row.matchedCategories,
         origin: row.origin,
         status: row.status,
+        waState: row.waState,
+        waError: row.waError,
         aiRelevant: row.aiRelevant,
         aiReason: row.aiReason,
         lastError: row.lastError,
@@ -360,6 +365,45 @@ export function createApp(deps: AppDeps): express.Express {
         return;
       }
       response.json({ ok: true, to: current.to });
+    }),
+  );
+
+  // ---- WhatsApp alerts ----
+
+  app.get('/api/settings/whatsapp-alerts', (_request, response) => {
+    response.json(settings.getWhatsAppAlertSettings());
+  });
+
+  app.put(
+    '/api/settings/whatsapp-alerts',
+    route(async (request, response) => {
+      const input = whatsappAlertSettingsSchema.parse(request.body);
+      if (input.target === 'number' && input.number) {
+        let exists = true;
+        try {
+          exists = await whatsapp.numberHasWhatsApp(input.number);
+        } catch (error) {
+          // Offline: save it anyway; sending will report problems.
+          if (!(error instanceof NotConnectedError)) {
+            throw error;
+          }
+        }
+        if (!exists) {
+          response.status(400).json({ error: 'That number is not on WhatsApp. Check the country code.' });
+          return;
+        }
+      }
+      response.json(settings.setWhatsAppAlertSettings(input));
+    }),
+  );
+
+  app.post(
+    '/api/settings/whatsapp-alerts/test',
+    route(async (_request, response) => {
+      await whatsapp.sendAlertText(
+        '🔔 *Test alert*\nWhatsApp alerts are working. Matches for alerts with "WhatsApp message" turned on will arrive here.',
+      );
+      response.json({ ok: true });
     }),
   );
 

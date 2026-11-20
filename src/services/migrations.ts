@@ -179,6 +179,17 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE alert_outbox ADD COLUMN ai_reason TEXT;
     `);
   },
+
+  // v5: WhatsApp delivery, tracked separately from email.
+  (db) => {
+    db.exec(`
+      ALTER TABLE alert_outbox ADD COLUMN wa_state TEXT;
+      ALTER TABLE alert_outbox ADD COLUMN wa_attempts INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE alert_outbox ADD COLUMN wa_error TEXT;
+      ALTER TABLE alert_outbox ADD COLUMN wa_sent_at INTEGER;
+      CREATE INDEX idx_alert_outbox_wa_state ON alert_outbox(wa_state);
+    `);
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

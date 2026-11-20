@@ -10,8 +10,8 @@ export function startServer(
   hooks: { onListening?: (port: number) => void; onError?: (error: Error) => void } = {},
 ): Server {
   const app = createApp(deps);
-  const server = app.listen(port, '127.0.0.1', () => {
-    logger.info({ port }, 'app listening on http://127.0.0.1:%d', port);
+  const server = app.listen(port, env.LISTEN_HOST, () => {
+    logger.info({ port, host: env.LISTEN_HOST }, 'app listening on http://127.0.0.1:%d', port);
     hooks.onListening?.(port);
   });
   server.on('error', (error) => {

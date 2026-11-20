@@ -1,5 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
+  jidNormalizedUser,
   type MessageUpsertType,
   type WAMessage,
   type WASocket,
@@ -131,6 +132,35 @@ export class WhatsAppClient {
     return { jid, name: await this.resolver.resolve(sock, jid) };
   }
 
+  /** True when an alert message can be sent right now. */
+  canSendAlerts(): boolean {
+    return this.status.state === 'connected' && this.sock !== null;
+  }
+
+  /** Send an alert to the chosen WhatsApp chat (your own chat by default). */
+  async sendAlertText(text: string): Promise<void> {
+    const sock = this.connectedSock();
+    const target = this.settings.getWhatsAppAlertSettings();
+    let jid: string;
+    if (target.target === 'number' && target.number) {
+      jid = `${target.number}@s.whatsapp.net`;
+    } else {
+      const own = sock.user?.id ?? this.status.account?.jid;
+      if (!own) {
+        throw new Error('Your WhatsApp account is not known yet');
+      }
+      jid = jidNormalizedUser(own);
+    }
+    await sock.sendMessage(jid, { text });
+  }
+
+  /** Whether a phone number (digits with country code) has WhatsApp. */
+  async numberHasWhatsApp(number: string): Promise<boolean> {
+    const sock = this.connectedSock();
+    const [result] = (await sock.onWhatsApp(number)) ?? [];
+    return Boolean(result?.exists);
+  }
+
   /** Unlink this device. The session is wiped and a new QR code is shown. */
   async logout(): Promise<void> {
     const sock = this.sock;
@@ -221,7 +251,9 @@ export class WhatsAppClient {
           state: 'connected',
           qr: null,
           lastConnectedAt: now,
-          account: sock.user ? { jid: sock.user.id, name: sock.user.name ?? null } : null,
+          // sock.user can be missing on the first connection after a QR scan;
+          // the saved credentials (updated in place by Baileys) always have it.
+          account: accountFrom(sock.user ?? state.creds.me) ?? this.status.account,
         });
         const gapStart = this.stateStore.getNumber('last_online_at');
         this.connectionOpenedAt = now;
@@ -552,4 +584,8 @@ function extractText(message: WAMessage): string {
     content?.documentMessage?.caption ||
     ''
   );
+}
+
+function accountFrom(user: { id: string; name?: string } | undefined): { jid: string; name: string | null } | null {
+  return user?.id ? { jid: user.id, name: user.name ?? null } : null;
 }

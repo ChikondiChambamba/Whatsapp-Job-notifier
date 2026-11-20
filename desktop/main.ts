@@ -49,15 +49,20 @@ function writeFlag(name: string): void {
  * database. The key itself is stored encrypted by the operating system
  * (Windows DPAPI, macOS Keychain, libsecret on Linux).
  */
-function loadSecretKey(): string | undefined {
-  if (!safeStorage.isEncryptionAvailable()) {
+async function loadSecretKey(): Promise<string | undefined> {
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) {
     console.warn('OS encryption unavailable; secrets will be stored unencrypted');
     return undefined;
   }
   const file = userDataPath('secret.key');
   if (existsSync(file)) {
     try {
-      return safeStorage.decryptString(readFileSync(file));
+      const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(readFileSync(file));
+      if (shouldReEncrypt) {
+        // The OS rotated its key; store ours again under the new one.
+        writeFileSync(file, await safeStorage.encryptStringAsync(result));
+      }
+      return result;
     } catch (error) {
       // A key we cannot open (e.g. the OS profile changed). Starting over
       // means the user re-enters their passwords; everything else is kept.
@@ -65,7 +70,7 @@ function loadSecretKey(): string | undefined {
     }
   }
   const key = randomBytes(32).toString('base64');
-  writeFileSync(file, safeStorage.encryptString(key));
+  writeFileSync(file, await safeStorage.encryptStringAsync(key));
   return key;
 }
 
@@ -94,7 +99,7 @@ function loadingPage(message: string): string {
 
 async function startBot(): Promise<void> {
   const port = await findFreePort();
-  const secretKey = loadSecretKey();
+  const secretKey = await loadSecretKey();
   botUrl = null;
 
   bot = utilityProcess.fork(join(app.getAppPath(), 'dist', 'index.js'), [], {

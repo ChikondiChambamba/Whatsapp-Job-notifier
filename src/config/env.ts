@@ -31,6 +31,8 @@ const optionalString = z
 const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   DASHBOARD_PORT: z.coerce.number().int().positive().default(4000),
+  /** Interface the web server binds to. Only change it inside a container. */
+  LISTEN_HOST: z.string().trim().default('127.0.0.1'),
   PROCESS_HISTORY_MESSAGES: boolish,
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
   CATCHUP_MIN_GAP_MS: z.coerce.number().int().positive().default(120000),

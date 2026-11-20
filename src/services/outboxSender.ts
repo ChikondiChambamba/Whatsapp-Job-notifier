@@ -5,6 +5,15 @@ import type { EmailService } from './emailService.js';
 import { logger } from './logger.js';
 import type { OutboxRow, OutboxStore } from './outboxStore.js';
 import type { StatsStore } from './statsStore.js';
+import { formatWhatsAppAlert, formatWhatsAppDigest } from './whatsappAlertFormat.js';
+
+export interface WhatsAppDelivery {
+  /** Whether an alert's profile wants a WhatsApp message. */
+  wants: (profileId: string) => boolean;
+  /** Connected and able to send right now. */
+  isReady: () => boolean;
+  send: (text: string) => Promise<void>;
+}
 
 const SEND_SPACING_MS = 1500;
 
@@ -23,6 +32,10 @@ export class OutboxSender {
       reviewer?: Pick<AiReviewer, 'run'>;
       /** Whether an alert's profile wants email (defaults to yes). */
       wantsEmail?: (profileId: string) => boolean;
+      /** WhatsApp message delivery, when available. */
+      whatsapp?: WhatsAppDelivery;
+      /** Pause between individual sends, to stay gentle on SMTP and WhatsApp. */
+      spacingMs?: number;
     } = {},
   ) {}
 
@@ -64,11 +77,39 @@ export class OutboxSender {
   private async drainOnce(): Promise<void> {
     await this.options.reviewer?.run();
 
+    const maxAgeMs = env.CATCHUP_MAX_AGE_HOURS * 60 * 60 * 1000;
+    const freshRows: OutboxRow[] = [];
+    for (const row of this.outboxStore.pendingRows()) {
+      if (row.postedAt < Date.now() - maxAgeMs) {
+        this.outboxStore.markExpired(row.id, 'older than catch-up max age');
+        recordStatsResult(this.statsStore, row, false, 'expired before send');
+      } else {
+        freshRows.push(row);
+      }
+    }
+
+    // Hold catch-up rows until they have settled so a reconnect backlog goes
+    // out as one digest instead of being split by an early live drain.
+    const settledBefore = Date.now() - this.catchupSettleMs;
+    const ready = freshRows.filter((row) => row.origin === 'live' || row.createdAt <= settledBefore);
+
+    // WhatsApp delivery is tracked separately, so flag it before the email
+    // step changes these rows' status.
+    const whatsapp = this.options.whatsapp;
+    if (whatsapp) {
+      this.outboxStore.markWhatsAppPending(
+        ready.filter((row) => row.waState === null && whatsapp.wants(row.profileId)).map((row) => row.id),
+      );
+    }
+
+    await this.sendEmails(ready);
+    await this.sendWhatsApp();
+  }
+
+  private async sendEmails(ready: OutboxRow[]): Promise<void> {
     const wantsEmail = this.options.wantsEmail ?? (() => true);
-    const allPending = this.outboxStore.pendingRows();
-    const inAppOnly = allPending.filter((row) => !wantsEmail(row.profileId));
-    this.outboxStore.markInApp(inAppOnly.map((row) => row.id));
-    const rows = allPending.filter((row) => wantsEmail(row.profileId));
+    this.outboxStore.markInApp(ready.filter((row) => !wantsEmail(row.profileId)).map((row) => row.id));
+    const rows = ready.filter((row) => wantsEmail(row.profileId));
     if (rows.length === 0) {
       return;
     }
@@ -83,38 +124,65 @@ export class OutboxSender {
     }
     this.warnedUnconfigured = false;
 
-    const maxAgeMs = env.CATCHUP_MAX_AGE_HOURS * 60 * 60 * 1000;
-    const freshRows: OutboxRow[] = [];
-
-    for (const row of rows) {
-      if (row.postedAt < Date.now() - maxAgeMs) {
-        this.outboxStore.markExpired(row.id, 'older than catch-up max age');
-        recordStatsResult(this.statsStore, row, false, 'expired before send');
-      } else {
-        freshRows.push(row);
-      }
-    }
-
-    // Hold catch-up rows until they have settled so a reconnect backlog goes
-    // out as one digest instead of being split by an early live drain.
-    const settledBefore = Date.now() - this.catchupSettleMs;
-    const catchupRows = freshRows.filter(
-      (row) => row.origin === 'catchup' && row.createdAt <= settledBefore,
-    );
-    const liveRows = freshRows.filter((row) => row.origin === 'live');
+    const catchupRows = rows.filter((row) => row.origin === 'catchup');
+    const liveRows = rows.filter((row) => row.origin === 'live');
 
     if (catchupRows.length >= env.CATCHUP_DIGEST_THRESHOLD) {
       await this.sendDigest(catchupRows);
     } else {
       for (const row of catchupRows) {
         await this.sendIndividual(row, '[Missed while offline]');
-        await delay(SEND_SPACING_MS);
+        await delay(this.options.spacingMs ?? SEND_SPACING_MS);
       }
     }
 
     for (const row of liveRows) {
       await this.sendIndividual(row);
-      await delay(SEND_SPACING_MS);
+      await delay(this.options.spacingMs ?? SEND_SPACING_MS);
+    }
+  }
+
+  private async sendWhatsApp(): Promise<void> {
+    const whatsapp = this.options.whatsapp;
+    if (!whatsapp) {
+      return;
+    }
+
+    const maxAgeMs = env.CATCHUP_MAX_AGE_HOURS * 60 * 60 * 1000;
+    const rows: OutboxRow[] = [];
+    for (const row of this.outboxStore.whatsappPendingRows()) {
+      if (row.postedAt < Date.now() - maxAgeMs) {
+        this.outboxStore.markWhatsAppExpired(row.id);
+      } else {
+        rows.push(row);
+      }
+    }
+    // Wait for WhatsApp to connect; the periodic drain retries.
+    if (rows.length === 0 || !whatsapp.isReady()) {
+      return;
+    }
+
+    const catchupRows = rows.filter((row) => row.origin === 'catchup');
+    const liveRows = rows.filter((row) => row.origin === 'live');
+    const batches: Array<{ rows: OutboxRow[]; text: string }> =
+      catchupRows.length >= env.CATCHUP_DIGEST_THRESHOLD
+        ? [{ rows: catchupRows, text: formatWhatsAppDigest(catchupRows) }]
+        : catchupRows.map((row) => ({ rows: [row], text: formatWhatsAppAlert(row) }));
+    batches.push(...liveRows.map((row) => ({ rows: [row], text: formatWhatsAppAlert(row) })));
+
+    for (const batch of batches) {
+      try {
+        await whatsapp.send(batch.text);
+        this.outboxStore.markWhatsAppSent(batch.rows.map((row) => row.id));
+        logger.info({ count: batch.rows.length }, 'WhatsApp alert sent');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        for (const row of batch.rows) {
+          this.outboxStore.markWhatsAppFailure(row.id, message);
+        }
+        logger.error({ count: batch.rows.length, error }, 'WhatsApp alert failed');
+      }
+      await delay(this.options.spacingMs ?? SEND_SPACING_MS);
     }
   }
 

@@ -24,6 +24,24 @@ export const aiSettingsSchema = z.object({
 });
 export type EmailSettingsInput = z.input<typeof emailSettingsSchema>;
 
+/** Where WhatsApp alerts go: the user's own chat, or another number. */
+export const whatsappAlertSettingsSchema = z
+  .object({
+    target: z.enum(['self', 'number']).default('self'),
+    /** International format digits, e.g. 265991234567. */
+    number: z
+      .string()
+      .trim()
+      .transform((value) => value.replace(/[\s()+-]/g, ''))
+      .optional(),
+  })
+  .refine((value) => value.target === 'self' || /^\d{8,15}$/.test(value.number ?? ''), {
+    message: 'Enter the full number with country code, e.g. 265991234567',
+    path: ['number'],
+  });
+
+export type WhatsAppAlertSettings = z.infer<typeof whatsappAlertSettingsSchema>;
+
 export type SourceKind = 'group' | 'channel';
 
 export interface Source {
@@ -54,6 +72,7 @@ interface ProfileRow {
 
 const EMAIL_KEY = 'email';
 const AI_KEY = 'ai';
+const WHATSAPP_ALERTS_KEY = 'whatsapp_alerts';
 
 /**
  * User-editable configuration: alert email settings, watched sources and
@@ -150,6 +169,19 @@ export class SettingsStore {
     const settings = emailSettingsSchema.parse(input);
     this.setValue(EMAIL_KEY, { ...settings, smtpPass: this.secrets.seal(settings.smtpPass) });
     return settings;
+  }
+
+  // ---- WhatsApp alerts ----
+
+  getWhatsAppAlertSettings(): WhatsAppAlertSettings {
+    const parsed = whatsappAlertSettingsSchema.safeParse(this.getValue(WHATSAPP_ALERTS_KEY) ?? {});
+    return parsed.success ? parsed.data : { target: 'self' };
+  }
+
+  setWhatsAppAlertSettings(input: z.input<typeof whatsappAlertSettingsSchema>): WhatsAppAlertSettings {
+    const settings = whatsappAlertSettingsSchema.parse(input);
+    this.setValue(WHATSAPP_ALERTS_KEY, settings.target === 'self' ? { target: 'self' } : settings);
+    return this.getWhatsAppAlertSettings();
   }
 
   // ---- AI ----

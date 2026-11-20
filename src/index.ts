@@ -43,9 +43,22 @@ const botStateStore = new BotStateStore(db);
 const emailService = new EmailService(() => settings.getEmailSettings());
 const aiChecker = new AiChecker(() => settings.getAiSettings());
 const aiReviewer = new AiReviewer(outboxStore, settings, aiChecker);
+// Created before the sender because the sender delivers WhatsApp alerts
+// through it; the client gets the sender afterwards (for catch-up drains).
+const whatsappRef: { client?: WhatsAppClient } = {};
 const outboxSender = new OutboxSender(outboxStore, emailService, statsStore, undefined, {
   reviewer: aiReviewer,
   wantsEmail: (profileId) => settings.getProfile(profileId)?.alerts.email ?? true,
+  whatsapp: {
+    wants: (profileId) => settings.getProfile(profileId)?.alerts.whatsappSelf ?? false,
+    isReady: () => whatsappRef.client?.canSendAlerts() ?? false,
+    send: async (text) => {
+      if (!whatsappRef.client) {
+        throw new Error('WhatsApp is not started yet');
+      }
+      await whatsappRef.client.sendAlertText(text);
+    },
+  },
 });
 const recentMessages = new RecentMessagesStore(db);
 
@@ -87,6 +100,7 @@ onShellMessage((message) => {
 bus.on('alert.ready', (alert) => sendToShell({ type: 'alert', ...alert }));
 
 const client = new WhatsAppClient({ settings, stateStore: botStateStore, outboxStore, outboxSender });
+whatsappRef.client = client;
 
 startServer({
   settings,
