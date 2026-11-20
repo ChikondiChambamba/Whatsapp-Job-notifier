@@ -1,0 +1,16 @@
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-job-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./auth_session:/app/auth_session
+      - ./data:/app/data
+    # Needed on the very first run so the WhatsApp QR code prints to your
+    # terminal for scanning. Safe to leave on permanently.
+    stdin_open: true
+    tty: true

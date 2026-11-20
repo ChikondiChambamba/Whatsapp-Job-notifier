@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+auth_session
+data
+logs
+.env
+.git
+.codex
+.agents
