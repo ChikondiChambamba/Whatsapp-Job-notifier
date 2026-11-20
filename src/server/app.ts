@@ -6,9 +6,11 @@ import { z, ZodError } from 'zod';
 import { compileProfile, scoreCompiled } from '../profiles/ruleEngine.js';
 import { PROFILE_TEMPLATES, getTemplate } from '../profiles/templates.js';
 import { profileSchema } from '../profiles/types.js';
+import { AI_MODELS, AiPermanentError, type AiChecker } from '../services/aiChecker.js';
 import type { OutboxStore } from '../services/outboxStore.js';
 import type { RecentMessagesStore } from '../services/recentMessagesStore.js';
 import {
+  aiSettingsSchema,
   emailSettingsSchema,
   type EmailSettings,
   type SettingsStore,
@@ -40,6 +42,7 @@ export interface AppDeps {
   recentMessages: RecentMessagesStore;
   whatsapp: WhatsAppControl;
   sendTestEmail: (settings: EmailSettings) => Promise<void>;
+  aiChecker: Pick<AiChecker, 'check' | 'isConfigured'>;
   /** Built web UI folder; omitted in tests. */
   webRoot?: string;
 }
@@ -78,6 +81,7 @@ export function createApp(deps: AppDeps): express.Express {
           sources: settings.listSources().length,
           profiles: settings.listProfiles().length,
           email: settings.getEmailSettings() !== null,
+          ai: settings.getAiSettings() !== null,
         },
       });
     }),
@@ -267,6 +271,28 @@ export function createApp(deps: AppDeps): express.Express {
     }),
   );
 
+  /** Ask the AI about one pasted message (costs one API call). */
+  app.post(
+    '/api/profiles/ai-test',
+    route(async (request, response) => {
+      const { description, text } = z
+        .object({
+          description: z.string().trim().min(1, 'Describe what you want first').max(1000),
+          text: z.string().trim().min(1, 'Paste a message first').max(20_000),
+        })
+        .parse(request.body);
+      if (!deps.aiChecker.isConfigured()) {
+        response.status(409).json({ error: 'Add your API key in Settings first' });
+        return;
+      }
+      try {
+        response.json(await deps.aiChecker.check(description, { text, sourceName: 'Test message' }));
+      } catch (error) {
+        response.status(502).json({ error: errorMessage(error) });
+      }
+    }),
+  );
+
   // ---- matches ----
 
   app.get('/api/matches', (request, response) => {
@@ -286,6 +312,8 @@ export function createApp(deps: AppDeps): express.Express {
         matchedCategories: row.matchedCategories,
         origin: row.origin,
         status: row.status,
+        aiRelevant: row.aiRelevant,
+        aiReason: row.aiReason,
         lastError: row.lastError,
         sentAt: row.sentAt,
       })),
@@ -334,6 +362,63 @@ export function createApp(deps: AppDeps): express.Express {
       response.json({ ok: true, to: current.to });
     }),
   );
+
+  // ---- AI ----
+
+  const aiView = () => {
+    const current = settings.getAiSettings();
+    return {
+      configured: current !== null,
+      model: current?.model ?? null,
+      // Only the last 4 characters, so people can tell which key is saved.
+      keyHint: current ? current.apiKey.slice(-4) : null,
+      models: AI_MODELS,
+    };
+  };
+
+  app.get('/api/settings/ai', (_request, response) => {
+    response.json(aiView());
+  });
+
+  app.put(
+    '/api/settings/ai',
+    route(async (request, response) => {
+      const body = z
+        .object({ apiKey: z.string().optional(), model: z.string().optional(), verify: z.boolean().optional() })
+        .parse(request.body);
+      const existing = settings.getAiSettings();
+      const candidate = aiSettingsSchema.parse({
+        apiKey: body.apiKey?.trim() || existing?.apiKey || '',
+        model: body.model ?? existing?.model,
+      });
+
+      // Check the key with one tiny request before saving it.
+      if (body.verify !== false) {
+        try {
+          await deps.aiChecker.check(
+            'Job vacancies for software developers',
+            { text: 'We are hiring a junior web developer. Send your CV.', sourceName: 'Key check' },
+            candidate,
+          );
+        } catch (error) {
+          if (error instanceof AiPermanentError) {
+            response.status(400).json({ error: errorMessage(error) });
+            return;
+          }
+          response.status(502).json({ error: `Could not check the key: ${errorMessage(error)}` });
+          return;
+        }
+      }
+
+      settings.setAiSettings(candidate);
+      response.json(aiView());
+    }),
+  );
+
+  app.delete('/api/settings/ai', (_request, response) => {
+    settings.clearAiSettings();
+    response.json(aiView());
+  });
 
   // ---- web UI ----
 

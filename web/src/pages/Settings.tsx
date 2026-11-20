@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
+import { AiForm } from '../components/AiForm';
 import { EmailForm } from '../components/EmailForm';
 import { QrPanel } from '../components/QrPanel';
 import { errorText, timeAgo } from '../format';
@@ -37,6 +38,11 @@ export function Settings({ status, refresh }: { status: AppStatus | undefined; r
       <section className="card">
         <h2>Email alerts</h2>
         <EmailForm />
+      </section>
+
+      <section className="card">
+        <h2>AI check</h2>
+        <AiForm onChange={refresh} />
       </section>
 
       <section className="card">

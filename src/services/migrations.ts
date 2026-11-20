@@ -171,6 +171,14 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_recent_messages_posted_at ON recent_messages(posted_at);
     `);
   },
+
+  // v4: AI second opinion on matched alerts.
+  (db) => {
+    db.exec(`
+      ALTER TABLE alert_outbox ADD COLUMN ai_relevant INTEGER;
+      ALTER TABLE alert_outbox ADD COLUMN ai_reason TEXT;
+    `);
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

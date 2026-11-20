@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { collapseBlankLines, dateTime, errorText, plural, timeAgo } from '../format';
 import { useApi, useDebounced } from '../hooks';
-import type { PreviewResult, Profile, RuleGroup, ScoreResult, Source } from '../types';
+import type { AiSettingsView, AiVerdict, PreviewResult, Profile, RuleGroup, ScoreResult, Source } from '../types';
 import { Switch } from './Switch';
 import { TermsInput } from './TermsInput';
 
@@ -61,6 +61,8 @@ export function ProfileEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sources = useApi<Source[]>('/api/sources');
+  const ai = useApi<AiSettingsView>('/api/settings/ai');
+  const aiConfigured = ai.data?.configured ?? false;
 
   useEffect(() => setProfile(initial), [initial]);
 
@@ -279,6 +281,42 @@ export function ProfileEditor({
       </section>
 
       <section className="card">
+        <div className="card-head">
+          <h2>Double-check with AI</h2>
+          <span className="badge">optional</span>
+        </div>
+        <p className="muted small">
+          After the words match, Claude reads the message and skips it if it is not really what you describe here.
+          Each check costs a small amount on your Anthropic account.
+        </p>
+        {!aiConfigured && ai.data && (
+          <div className="notice">
+            Add an Anthropic API key in <a href="#/settings">Settings</a> to use this.
+          </div>
+        )}
+        <div className="row" style={{ marginBottom: 10 }}>
+          <Switch
+            checked={profile.ai.enabled}
+            disabled={!aiConfigured && !profile.ai.enabled}
+            onChange={(enabled) => update({ ai: { ...profile.ai, enabled } })}
+            label="Double-check with AI"
+          />
+          <span>{profile.ai.enabled ? 'AI checks every match before alerting you' : 'Off: words alone decide'}</span>
+        </div>
+        {(profile.ai.enabled || profile.ai.description) && (
+          <label className="field">
+            <span className="field-label">Describe what you want, as you would to a friend</span>
+            <textarea
+              value={profile.ai.description}
+              maxLength={1000}
+              placeholder="e.g. Vacancies for software developers or IT support in Malawi. Not people asking for jobs, and not sales or marketing roles."
+              onChange={(event) => update({ ai: { ...profile.ai, description: event.target.value } })}
+            />
+          </label>
+        )}
+      </section>
+
+      <section className="card">
         <h2>How to alert me</h2>
         <div className="row">
           <Switch
@@ -286,11 +324,11 @@ export function ProfileEditor({
             onChange={(email) => update({ alerts: { ...profile.alerts, email } })}
             label="Email"
           />
-          <span>Email</span>
+          <span>{profile.alerts.email ? 'Email me each match' : 'Email off: matches are only listed in this app'}</span>
         </div>
       </section>
 
-      <TryIt profile={profile} />
+      <TryIt profile={profile} aiConfigured={aiConfigured} />
 
       {error && <div className="notice danger">{error}</div>}
       <div className="spread">
@@ -323,7 +361,10 @@ export function ProfileEditor({
 }
 
 /** Live test against a pasted message, plus a preview over recent messages. */
-function TryIt({ profile }: { profile: Profile }) {
+function TryIt({ profile, aiConfigured }: { profile: Profile; aiConfigured: boolean }) {
+  const [verdict, setVerdict] = useState<AiVerdict | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
@@ -352,6 +393,25 @@ function TryIt({ profile }: { profile: Profile }) {
 
   // A preview is stale once the rules change.
   useEffect(() => setPreview(null), [debouncedProfile]);
+  // An AI answer is stale once the message or description changes.
+  useEffect(() => {
+    setVerdict(null);
+    setAiError(null);
+  }, [text, profile.ai.description]);
+
+  const askAi = async () => {
+    setAsking(true);
+    setAiError(null);
+    try {
+      setVerdict(await api.post<AiVerdict>('/api/profiles/ai-test', { description: profile.ai.description, text }));
+    } catch (err) {
+      setAiError(errorText(err));
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const canAskAi = aiConfigured && profile.ai.enabled && profile.ai.description.trim() && text.trim();
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -391,8 +451,24 @@ function TryIt({ profile }: { profile: Profile }) {
         </div>
       )}
 
+      {canAskAi && (
+        <div className="row" style={{ marginBottom: 8 }}>
+          <button type="button" className="btn small" disabled={asking} onClick={() => void askAi()}>
+            {asking ? 'Asking the AI…' : 'Ask the AI about this message'}
+          </button>
+          <span className="muted small">Uses one AI check.</span>
+        </div>
+      )}
+      {aiError && <div className="notice warn">{aiError}</div>}
+      {verdict && (
+        <div className={`notice ${verdict.relevant ? 'ok' : ''}`}>
+          <strong>AI: {verdict.relevant ? 'yes, this is what you want' : 'no, it would skip this'}</strong>
+          <div className="small">{verdict.reason}</div>
+        </div>
+      )}
+
       <div className="spread" style={{ marginTop: 8 }}>
-        <span className="muted small">Or check what it would have caught recently.</span>
+        <span className="muted small">Or check what it would have caught recently (words only, no AI cost).</span>
         <button type="button" className="btn" disabled={previewing} onClick={() => void runPreview()}>
           {previewing ? 'Checking…' : 'Check recent messages'}
         </button>

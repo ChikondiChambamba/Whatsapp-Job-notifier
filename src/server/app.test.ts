@@ -31,6 +31,8 @@ async function setup(whatsappOverrides: Partial<WhatsAppControl> = {}) {
     ...whatsappOverrides,
   };
   const sendTestEmail = vi.fn(async () => undefined);
+  const aiCheck = vi.fn(async () => ({ relevant: true, reason: 'Looks like what you want.' }));
+  const aiChecker = { check: aiCheck, isConfigured: () => settings.getAiSettings() !== null };
   const app = createApp({
     settings,
     statsStore: new StatsStore(db),
@@ -38,6 +40,7 @@ async function setup(whatsappOverrides: Partial<WhatsAppControl> = {}) {
     recentMessages,
     whatsapp,
     sendTestEmail,
+    aiChecker,
   });
 
   server = await new Promise<Server>((resolve) => {
@@ -55,7 +58,7 @@ async function setup(whatsappOverrides: Partial<WhatsAppControl> = {}) {
     return { status: response.status, body: text ? JSON.parse(text) : null };
   };
 
-  return { call, settings, recentMessages, whatsapp, sendTestEmail, base, status };
+  return { call, settings, recentMessages, whatsapp, sendTestEmail, aiCheck, base, status };
 }
 
 const blankProfile = (overrides: Record<string, unknown> = {}) => ({
@@ -102,7 +105,7 @@ describe('API', () => {
     const { body } = await call('GET', '/api/status');
     expect(body.whatsapp.state).toBe('connected');
     expect(body.whatsapp.qr).toBeUndefined();
-    expect(body.setup).toEqual({ linked: true, sources: 0, profiles: 0, email: false });
+    expect(body.setup).toEqual({ linked: true, sources: 0, profiles: 0, email: false, ai: false });
   });
 
   it('renders the QR code as an image while waiting for a scan', async () => {
@@ -225,5 +228,54 @@ describe('API', () => {
     const { status, body } = await call('POST', '/api/settings/email/test', {});
     expect(status).toBe(502);
     expect(body.error).toContain('Invalid login');
+  });
+
+  it('verifies the AI key before saving and never returns it', async () => {
+    const { call, settings, aiCheck } = await setup();
+
+    const saved = await call('PUT', '/api/settings/ai', { apiKey: 'sk-ant-secret-1234', model: 'claude-haiku-5-5' });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ configured: true, model: 'claude-haiku-5-5', keyHint: '1234' });
+    expect(JSON.stringify(saved.body)).not.toContain('secret');
+    expect(aiCheck).toHaveBeenCalledTimes(1);
+    expect(settings.getAiSettings()?.apiKey).toBe('sk-ant-secret-1234');
+
+    // Changing only the model keeps the saved key.
+    await call('PUT', '/api/settings/ai', { model: 'claude-opus-5-5', verify: false });
+    expect(settings.getAiSettings()).toEqual({ apiKey: 'sk-ant-secret-1234', model: 'claude-opus-5-5' });
+
+    expect((await call('DELETE', '/api/settings/ai')).body.configured).toBe(false);
+  });
+
+  it('does not save a key the API rejects', async () => {
+    const { call, settings, aiCheck } = await setup();
+    const { AiPermanentError } = await import('../services/aiChecker.js');
+    aiCheck.mockRejectedValueOnce(new AiPermanentError('The API key was rejected. Check it in Settings.'));
+
+    const { status, body } = await call('PUT', '/api/settings/ai', { apiKey: 'bad' });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/rejected/);
+    expect(settings.getAiSettings()).toBeNull();
+  });
+
+  it('runs an AI test on pasted text once a key is saved', async () => {
+    const { call } = await setup();
+    const input = { description: 'Laptops under K300,000', text: 'Selling a laptop' };
+    expect((await call('POST', '/api/profiles/ai-test', input)).status).toBe(409);
+
+    await call('PUT', '/api/settings/ai', { apiKey: 'sk-ant-x', verify: false });
+    const { body } = await call('POST', '/api/profiles/ai-test', input);
+    expect(body).toEqual({ relevant: true, reason: 'Looks like what you want.' });
+  });
+
+  it('rejects enabling the AI check without a description', async () => {
+    const { call } = await setup();
+    const created = await call('POST', '/api/profiles', blankProfile());
+    const { status, body } = await call('PUT', '/api/profiles/laptops', {
+      ...created.body,
+      ai: { enabled: true, description: '' },
+    });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/Describe what you want/);
   });
 });

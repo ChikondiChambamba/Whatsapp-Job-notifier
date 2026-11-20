@@ -73,4 +73,31 @@ describe('MessagePipeline', () => {
     expect(outboxStore.pendingRows()).toHaveLength(1);
     expect(outboxSender.drain).not.toHaveBeenCalled();
   });
+
+  it('queues AI-checked profiles for review when a key is saved', () => {
+    const db = new Database(':memory:');
+    const settings = new SettingsStore(db);
+    const outboxStore = new OutboxStore(db);
+    settings.saveProfile({
+      id: 'laptops',
+      name: 'Laptops',
+      threshold: 2,
+      groups: [{ id: 'what', label: 'What', weight: 2, terms: ['laptop'], required: true }],
+      ai: { enabled: true, description: 'Cheap laptops' },
+    });
+    const run = (aiReady: boolean, messageId: string) =>
+      new MessagePipeline({
+        settings,
+        statsStore: new StatsStore(db),
+        outboxStore,
+        outboxSender: { drain: vi.fn() },
+        aiReady: () => aiReady,
+      }).process(message({ messageId, rawText: 'Laptop for sale' }));
+
+    run(true, 'with-key');
+    run(false, 'no-key');
+
+    const statuses = Object.fromEntries(outboxStore.recentRows().map((row) => [row.messageId, row.status]));
+    expect(statuses).toEqual({ 'with-key': 'review', 'no-key': 'pending' });
+  });
 });

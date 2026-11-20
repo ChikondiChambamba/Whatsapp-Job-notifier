@@ -97,6 +97,7 @@ export class EmailService {
         <p><strong>Sender:</strong> ${escapeHtml(payload.sender)}</p>
         <p><strong>Score:</strong> ${payload.score}</p>
         <p><strong>Matched terms:</strong> ${escapeHtml(payload.matchedKeywords.join(', '))}</p>
+        ${payload.aiReason ? `<p><strong>AI check:</strong> ${escapeHtml(payload.aiReason)}</p>` : ''}
         <hr />
         <blockquote style="white-space: pre-wrap; border-left: 4px solid #2563eb; margin: 0; padding: 8px 12px; background: #f8fafc;">${escapeHtml(payload.rawText)}</blockquote>
         <hr />
@@ -113,6 +114,7 @@ export class EmailService {
         <p style="margin: 0 0 6px;"><strong>Posted:</strong> ${escapeHtml(formatPostedAt(row.postedAt))}</p>
         <p style="margin: 0 0 6px;"><strong>Score:</strong> ${row.score}</p>
         <p style="margin: 0 0 10px;"><strong>Matched categories:</strong> ${escapeHtml(row.matchedCategories.join(', '))}</p>
+        ${row.aiReason ? `<p style="margin: 0 0 10px;"><strong>AI check:</strong> ${escapeHtml(row.aiReason)}</p>` : ''}
         <div style="white-space: normal; border-left: 4px solid #2563eb; padding: 8px 12px; background: #f8fafc;">${escapeHtml(row.text).replaceAll('\n', '<br>')}</div>
       </section>
     `;

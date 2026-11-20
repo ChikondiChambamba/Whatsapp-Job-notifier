@@ -12,6 +12,8 @@ import { StatsStore } from './services/statsStore.js';
 import { WhatsAppClient } from './whatsapp/client.js';
 import { paths } from './config/paths.js';
 import { RecentMessagesStore } from './services/recentMessagesStore.js';
+import { AiChecker } from './services/aiChecker.js';
+import { AiReviewer } from './services/aiReviewer.js';
 import { startServer } from './server/server.js';
 
 process.on('uncaughtException', (error) => {
@@ -30,10 +32,22 @@ const statsStore = new StatsStore(db);
 const outboxStore = new OutboxStore(db);
 const botStateStore = new BotStateStore(db);
 const emailService = new EmailService(() => settings.getEmailSettings());
-const outboxSender = new OutboxSender(outboxStore, emailService, statsStore);
+const aiChecker = new AiChecker(() => settings.getAiSettings());
+const aiReviewer = new AiReviewer(outboxStore, settings, aiChecker);
+const outboxSender = new OutboxSender(outboxStore, emailService, statsStore, undefined, {
+  reviewer: aiReviewer,
+  wantsEmail: (profileId) => settings.getProfile(profileId)?.alerts.email ?? true,
+});
 const recentMessages = new RecentMessagesStore(db);
 
-new MessagePipeline({ settings, statsStore, outboxStore, outboxSender, recentMessages }).start();
+new MessagePipeline({
+  settings,
+  statsStore,
+  outboxStore,
+  outboxSender,
+  recentMessages,
+  aiReady: () => aiChecker.isConfigured(),
+}).start();
 void outboxSender.drain();
 outboxSender.startPeriodicDrain();
 
@@ -42,6 +56,7 @@ logger.info(
     profiles: settings.listProfiles().map((profile) => profile.name),
     sources: settings.listSources().length,
     emailConfigured: emailService.isConfigured(),
+    aiConfigured: aiChecker.isConfigured(),
   },
   'configuration loaded',
 );
@@ -79,6 +94,7 @@ startServer({
       timestamp: new Date(),
       origin: 'live',
     }),
+  aiChecker,
   webRoot: paths.webStatic,
 });
 

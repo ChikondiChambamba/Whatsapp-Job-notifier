@@ -34,7 +34,17 @@ Settings live in the app database, not in `.env`:
   - an optional list-post filter that marks down long numbered/bulleted posts mostly about things the profile excludes.
 - **Terms** are plain words or phrases matched as whole words, ignoring case and spacing. `*` matches the rest of a word (`engineer*`). Advanced users can write a regular expression as `/pattern/flags`.
 
-A message matching several profiles produces one alert per profile.
+A message matching several profiles produces one alert per profile. Each profile can email its matches or, with email turned off, only list them in the app.
+
+## Optional AI check
+
+Each alert can also be double-checked by Claude. After a message passes the word lists, it is sent with the alert's plain-English description ("Vacancies for software developers in Malawi, not people asking for jobs") to the Anthropic API, which answers yes or no with a short reason. Rejected matches are kept in the app (marked "Skipped by AI") instead of being emailed.
+
+- Add an Anthropic API key and pick a model in Settings. The key is checked with one request before it is saved and is never sent back to the browser. Usage is billed to that key.
+- The default model is Claude Opus 5.5. Claude Sonnet 5.5 and Claude Haiku 5.5 are cheaper options in the same menu.
+- Only messages that already matched the words are sent to the API, at low effort.
+- It fails open: if the API cannot be reached after 3 tries, the key stops working, or the model declines to judge a message, the alert is sent anyway with a note saying it was not checked.
+- Opus 5.5 and Sonnet 5.5 requests opt in to Anthropic's server-side fallback, so a declined request is retried on another model instead of failing.
 
 ## Upgrading from the .env setup
 

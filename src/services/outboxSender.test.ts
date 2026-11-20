@@ -116,4 +116,37 @@ describe('OutboxSender', () => {
 
     outboxStore.close();
   });
+
+  it('runs the AI reviewer first and keeps email-off alerts in the app only', async () => {
+    const db = new Database(':memory:');
+    const outboxStore = new OutboxStore(db);
+    const statsStore = new StatsStore(db);
+    const emailService = { sendDigest: vi.fn(), sendAlert: vi.fn().mockResolvedValue(undefined), isConfigured: () => true };
+    const base = {
+      sourceJid: 'g@g.us',
+      sourceName: 'Group',
+      sourceType: 'GROUP' as const,
+      text: 'Hiring',
+      postedAt: Date.now(),
+      score: 5,
+      matchedCategories: [],
+      origin: 'live' as const,
+    };
+    outboxStore.insertPending({ ...base, messageId: 'a', profileId: 'emailed', profileName: 'Emailed' });
+    outboxStore.insertPending({ ...base, messageId: 'b', profileId: 'quiet', profileName: 'Quiet' });
+    const reviewer = { run: vi.fn().mockResolvedValue(0) };
+
+    const sender = new OutboxSender(outboxStore, emailService as unknown as EmailService, statsStore, 0, {
+      reviewer,
+      wantsEmail: (profileId) => profileId !== 'quiet',
+    });
+    await sender.drain();
+
+    expect(reviewer.run).toHaveBeenCalledTimes(1);
+    expect(emailService.sendAlert).toHaveBeenCalledTimes(1);
+    const statuses = Object.fromEntries(outboxStore.recentRows().map((row) => [row.profileId, row.status]));
+    expect(statuses).toEqual({ emailed: 'sent', quiet: 'in_app' });
+
+    outboxStore.close();
+  });
 });

@@ -15,6 +15,8 @@ export interface PipelineDeps {
   outboxSender: Pick<OutboxSender, 'drain'>;
   recentMessages?: RecentMessagesStore;
   engine?: RuleEngine;
+  /** True when an AI key is saved, so AI-enabled profiles queue alerts for review. */
+  aiReady?: () => boolean;
 }
 
 /** Scores each incoming message against every profile watching its source. */
@@ -97,6 +99,7 @@ export class MessagePipeline {
           matchedCategories,
           origin: message.origin,
           statsEventId: eventId,
+          status: profile.ai.enabled && this.deps.aiReady?.() ? 'review' : 'pending',
         });
       }
     }

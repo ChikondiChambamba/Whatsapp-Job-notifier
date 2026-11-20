@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import type { AlertPayload } from '../interfaces/payload.js';
+import type { AiReviewer } from './aiReviewer.js';
 import type { EmailService } from './emailService.js';
 import { logger } from './logger.js';
 import type { OutboxRow, OutboxStore } from './outboxStore.js';
@@ -17,6 +18,12 @@ export class OutboxSender {
     private readonly emailService: Pick<EmailService, 'sendAlert' | 'sendDigest' | 'isConfigured'>,
     private readonly statsStore: StatsStore,
     private readonly catchupSettleMs = env.CATCHUP_SETTLE_MS,
+    private readonly options: {
+      /** Runs first on every drain so AI-approved alerts go out in the same pass. */
+      reviewer?: Pick<AiReviewer, 'run'>;
+      /** Whether an alert's profile wants email (defaults to yes). */
+      wantsEmail?: (profileId: string) => boolean;
+    } = {},
   ) {}
 
   /**
@@ -55,7 +62,13 @@ export class OutboxSender {
   }
 
   private async drainOnce(): Promise<void> {
-    const rows = this.outboxStore.pendingRows();
+    await this.options.reviewer?.run();
+
+    const wantsEmail = this.options.wantsEmail ?? (() => true);
+    const allPending = this.outboxStore.pendingRows();
+    const inAppOnly = allPending.filter((row) => !wantsEmail(row.profileId));
+    this.outboxStore.markInApp(inAppOnly.map((row) => row.id));
+    const rows = allPending.filter((row) => wantsEmail(row.profileId));
     if (rows.length === 0) {
       return;
     }
@@ -143,6 +156,7 @@ function toPayload(row: OutboxRow): AlertPayload {
     messageId: row.messageId,
     profileId: row.profileId,
     profileName: row.profileName,
+    aiReason: row.aiReason,
     sourceJid: row.sourceJid,
     sourceName: row.sourceName || row.sourceJid,
     sourceType: row.sourceType === 'group' ? 'GROUP' : 'CHANNEL',

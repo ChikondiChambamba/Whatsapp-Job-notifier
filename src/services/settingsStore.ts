@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { profileSchema, type ProfileInput, type StoredProfile } from '../profiles/types.js';
+import { AI_MODELS, DEFAULT_AI_MODEL, type AiSettings } from './aiChecker.js';
 import { openDatabase, type Db } from './database.js';
 
 export const emailSettingsSchema = z.object({
@@ -12,6 +13,13 @@ export const emailSettingsSchema = z.object({
 });
 
 export type EmailSettings = z.infer<typeof emailSettingsSchema>;
+
+const modelIds = AI_MODELS.map((model) => model.id) as [AiSettings['model'], ...AiSettings['model'][]];
+
+export const aiSettingsSchema = z.object({
+  apiKey: z.string().trim().min(1, 'Paste your Anthropic API key'),
+  model: z.enum(modelIds).default(DEFAULT_AI_MODEL),
+});
 export type EmailSettingsInput = z.input<typeof emailSettingsSchema>;
 
 export type SourceKind = 'group' | 'channel';
@@ -43,6 +51,7 @@ interface ProfileRow {
 }
 
 const EMAIL_KEY = 'email';
+const AI_KEY = 'ai';
 
 /**
  * User-editable configuration: alert email settings, watched sources and
@@ -94,6 +103,23 @@ export class SettingsStore {
     const settings = emailSettingsSchema.parse(input);
     this.setValue(EMAIL_KEY, settings);
     return settings;
+  }
+
+  // ---- AI ----
+
+  getAiSettings(): AiSettings | null {
+    const parsed = aiSettingsSchema.safeParse(this.getValue(AI_KEY));
+    return parsed.success ? parsed.data : null;
+  }
+
+  setAiSettings(input: z.input<typeof aiSettingsSchema>): AiSettings {
+    const settings = aiSettingsSchema.parse(input);
+    this.setValue(AI_KEY, settings);
+    return settings;
+  }
+
+  clearAiSettings(): void {
+    this.db.prepare('DELETE FROM settings WHERE key = ?').run(AI_KEY);
   }
 
   // ---- sources ----

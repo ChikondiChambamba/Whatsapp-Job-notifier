@@ -18,4 +18,6 @@ export interface AlertPayload extends IncomingMessage {
   profileName: string;
   matchedKeywords: string[];
   score: number;
+  /** The AI's explanation, when an AI check ran. */
+  aiReason?: string | null;
 }

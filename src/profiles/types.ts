@@ -62,6 +62,17 @@ export const profileSchema = z.object({
       whatsappSelf: z.boolean().default(false),
     })
     .default({ email: true, whatsappSelf: false }),
+  /** Optional AI second opinion on keyword matches, using the user's own API key. */
+  ai: z
+    .object({
+      enabled: z.boolean().default(false),
+      description: z.string().trim().max(1000).default(''),
+    })
+    .refine((ai) => !ai.enabled || ai.description.length > 0, {
+      message: 'Describe what you want so the AI can check matches',
+      path: ['description'],
+    })
+    .default({ enabled: false, description: '' }),
 });
 
 export type RuleGroup = z.infer<typeof ruleGroupSchema>;

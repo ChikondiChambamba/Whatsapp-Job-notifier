@@ -3,7 +3,13 @@ import { openDatabase, type Db } from './database.js';
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type OutboxOrigin = 'live' | 'catchup';
-export type OutboxStatus = 'pending' | 'sent' | 'failed' | 'expired';
+/**
+ * review   - waiting for the AI second opinion
+ * pending  - ready to send
+ * rejected - the AI said the match is not wanted (kept for the app's list)
+ * in_app   - the alert's email delivery is off; shown in the app only
+ */
+export type OutboxStatus = 'review' | 'pending' | 'sent' | 'failed' | 'expired' | 'rejected' | 'in_app';
 
 export interface QueueAlertInput {
   messageId: string;
@@ -18,6 +24,8 @@ export interface QueueAlertInput {
   matchedCategories: string[];
   origin: OutboxOrigin;
   statsEventId?: number;
+  /** 'review' when an AI check must run before sending. */
+  status?: 'pending' | 'review';
 }
 
 export interface OutboxRow {
@@ -39,6 +47,8 @@ export interface OutboxRow {
   createdAt: number;
   sentAt: number | null;
   statsEventId: number | null;
+  aiRelevant: boolean | null;
+  aiReason: string | null;
 }
 
 interface DbOutboxRow {
@@ -60,6 +70,8 @@ interface DbOutboxRow {
   created_at: number;
   sent_at: number | null;
   stats_event_id: number | null;
+  ai_relevant: number | null;
+  ai_reason: string | null;
 }
 
 interface CountRow {
@@ -114,7 +126,7 @@ export class OutboxStore {
             created_at,
             stats_event_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -129,6 +141,7 @@ export class OutboxStore {
         input.score,
         JSON.stringify(input.matchedCategories),
         input.origin,
+        input.status ?? 'pending',
         Date.now(),
         input.statsEventId ?? null,
       );
@@ -150,6 +163,40 @@ export class OutboxStore {
       .all() as DbOutboxRow[];
 
     return rows.map(mapRow);
+  }
+
+  reviewRows(): OutboxRow[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM alert_outbox WHERE status = 'review' ORDER BY posted_at ASC, id ASC`)
+      .all() as DbOutboxRow[];
+    return rows.map(mapRow);
+  }
+
+  /** Record the AI outcome and move the alert on ('pending' to send, 'rejected' to hold). */
+  markReviewed(id: number, status: 'pending' | 'rejected', verdict: { relevant: boolean | null; reason: string | null }): void {
+    this.db
+      .prepare(
+        `UPDATE alert_outbox SET status = ?, ai_relevant = ?, ai_reason = ?, attempts = 0, last_error = NULL
+         WHERE id = ? AND status = 'review'`,
+      )
+      .run(status, verdict.relevant === null ? null : verdict.relevant ? 1 : 0, verdict.reason, id);
+  }
+
+  markReviewAttempt(id: number, error: string): number {
+    this.db
+      .prepare('UPDATE alert_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?')
+      .run(error, id);
+    return (this.db.prepare('SELECT attempts FROM alert_outbox WHERE id = ?').get(id) as { attempts: number } | undefined)
+      ?.attempts ?? 0;
+  }
+
+  markInApp(ids: number[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    this.db
+      .prepare(`UPDATE alert_outbox SET status = 'in_app' WHERE id IN (${ids.map(() => '?').join(', ')})`)
+      .run(...ids);
   }
 
   /** Most recent alerts in any state, newest first. */
@@ -248,6 +295,8 @@ function mapRow(row: DbOutboxRow): OutboxRow {
     createdAt: row.created_at,
     sentAt: row.sent_at,
     statsEventId: row.stats_event_id,
+    aiRelevant: row.ai_relevant === null ? null : row.ai_relevant === 1,
+    aiReason: row.ai_reason,
   };
 }
 

@@ -5,8 +5,11 @@ import type { Match } from '../types';
 const STATUS: Record<Match['status'], { label: string; tone: string }> = {
   sent: { label: 'Emailed', tone: 'ok' },
   pending: { label: 'Waiting to send', tone: 'warn' },
+  review: { label: 'Being checked by AI', tone: 'warn' },
   failed: { label: 'Failed', tone: 'danger' },
   expired: { label: 'Too old to send', tone: '' },
+  rejected: { label: 'Skipped by AI', tone: '' },
+  in_app: { label: 'Shown here only', tone: 'accent' },
 };
 
 export function MatchList({ matches }: { matches: Match[] | undefined }) {
@@ -40,6 +43,11 @@ export function MatchList({ matches }: { matches: Match[] | undefined }) {
               {/* Collapse runs of blank lines in the short preview. */}
               {expanded ? match.text : collapseBlankLines(match.text)}
             </div>
+            {match.aiReason && (
+              <p className="small muted" style={{ margin: '6px 0 0' }}>
+                <strong>AI:</strong> {match.aiReason}
+              </p>
+            )}
             <div className="spread small" style={{ marginTop: 4 }}>
               <span className={`badge ${status.tone}`} title={match.lastError ?? undefined}>
                 {status.label}

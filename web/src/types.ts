@@ -18,6 +18,7 @@ export interface Profile {
   threshold: number;
   listPostFilter: { enabled: boolean; minListItems: number; minExcludedHits: number; penalty: number };
   alerts: { email: boolean; whatsappSelf: boolean };
+  ai: { enabled: boolean; description: string };
   createdAt?: number;
   updatedAt?: number;
 }
@@ -44,7 +45,7 @@ export interface AppStatus {
     account: { jid: string; name: string | null } | null;
     lastConnectedAt: number | null;
   };
-  setup: { linked: boolean; sources: number; profiles: number; email: boolean };
+  setup: { linked: boolean; sources: number; profiles: number; email: boolean; ai: boolean };
 }
 
 export interface Source {
@@ -100,7 +101,9 @@ export interface Match {
   score: number;
   matchedCategories: string[];
   origin: 'live' | 'catchup';
-  status: 'pending' | 'sent' | 'failed' | 'expired';
+  status: 'review' | 'pending' | 'sent' | 'failed' | 'expired' | 'rejected' | 'in_app';
+  aiRelevant: boolean | null;
+  aiReason: string | null;
   lastError: string | null;
   sentAt: number | null;
 }
@@ -121,4 +124,22 @@ export interface EmailSettings {
   to?: string;
   fromName?: string;
   hasPassword?: boolean;
+}
+
+export interface AiModel {
+  id: string;
+  label: string;
+  note: string;
+}
+
+export interface AiSettingsView {
+  configured: boolean;
+  model: string | null;
+  keyHint: string | null;
+  models: AiModel[];
+}
+
+export interface AiVerdict {
+  relevant: boolean;
+  reason: string;
 }
