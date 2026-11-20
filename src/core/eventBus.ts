@@ -3,8 +3,17 @@ import type { IncomingMessage } from '../interfaces/payload.js';
 
 type ConnectionState = 'open' | 'close' | 'reconnecting';
 
+export interface AlertReady {
+  profileName: string;
+  sourceName: string;
+  text: string;
+  origin: 'live' | 'catchup';
+}
+
 interface BotEvents {
   'message.received': [IncomingMessage];
+  /** An alert passed every check and will reach the user. */
+  'alert.ready': [AlertReady];
   'connection.state': [ConnectionState];
 }
 

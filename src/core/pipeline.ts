@@ -109,6 +109,14 @@ export class MessagePipeline {
     }
 
     outboxStore.markSeenAndQueue(message.messageId, alerts);
+    for (const alert of alerts.filter((a) => a.status !== 'review')) {
+      bus.emit('alert.ready', {
+        profileName: alert.profileName,
+        sourceName: alert.sourceName,
+        text: alert.text,
+        origin: alert.origin,
+      });
+    }
 
     // Catch-up alerts are drained after the settle window (or by the periodic drain).
     if (alerts.length > 0 && message.origin === 'live') {

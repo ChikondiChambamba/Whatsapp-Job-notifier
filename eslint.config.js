@@ -5,7 +5,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist/**', 'web-dist/**', 'node_modules/**', 'auth_session/**', 'data/**'],
+    ignores: ['dist/**', 'web-dist/**', 'desktop-dist/**', 'release/**', 'node_modules/**', 'auth_session/**', 'data/**'],
   },
   {
     files: ['src/**/*.ts'],

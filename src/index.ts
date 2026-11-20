@@ -15,6 +15,10 @@ import { RecentMessagesStore } from './services/recentMessagesStore.js';
 import { AiChecker } from './services/aiChecker.js';
 import { AiReviewer } from './services/aiReviewer.js';
 import { startServer } from './server/server.js';
+import { bus } from './core/eventBus.js';
+import { onShellMessage, sendToShell } from './desktop/bridge.js';
+import { SecretBox } from './services/secretBox.js';
+import { env } from './config/env.js';
 
 process.on('uncaughtException', (error) => {
   logger.error({ error }, 'uncaught exception');
@@ -25,8 +29,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const db = openDatabase();
-const settings = new SettingsStore(db);
+// The desktop app passes a key protected by the operating system.
+const settings = new SettingsStore(db, SecretBox.fromBase64(process.env.APP_SECRET_KEY));
 importLegacyEnv(settings);
+const encrypted = settings.encryptStoredSecrets();
+if (encrypted > 0) {
+  logger.info({ count: encrypted }, 'saved secrets encrypted');
+}
 
 const statsStore = new StatsStore(db);
 const outboxStore = new OutboxStore(db);
@@ -70,6 +79,12 @@ const shutdown = (): void => {
 
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
+onShellMessage((message) => {
+  if (message.type === 'shutdown') {
+    shutdown();
+  }
+});
+bus.on('alert.ready', (alert) => sendToShell({ type: 'alert', ...alert }));
 
 const client = new WhatsAppClient({ settings, stateStore: botStateStore, outboxStore, outboxSender });
 
@@ -96,6 +111,9 @@ startServer({
     }),
   aiChecker,
   webRoot: paths.webStatic,
+}, env.DASHBOARD_PORT, {
+  onListening: (port) => sendToShell({ type: 'ready', port }),
+  onError: (error) => sendToShell({ type: 'fatal', message: error.message }),
 });
 
 void client.start().catch((error: unknown) => {

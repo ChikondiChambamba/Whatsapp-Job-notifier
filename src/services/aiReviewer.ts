@@ -1,3 +1,4 @@
+import { bus } from '../core/eventBus.js';
 import { AiPermanentError, type AiChecker } from './aiChecker.js';
 import { logger } from './logger.js';
 import type { OutboxRow, OutboxStore } from './outboxStore.js';
@@ -41,8 +42,21 @@ export class AiReviewer {
     return released;
   }
 
-  /** Returns true when the alert was released for sending. */
   private async review(row: OutboxRow): Promise<boolean> {
+    const released = await this.decide(row);
+    if (released) {
+      bus.emit('alert.ready', {
+        profileName: row.profileName,
+        sourceName: row.sourceName ?? row.sourceJid,
+        text: row.text,
+        origin: row.origin,
+      });
+    }
+    return released;
+  }
+
+  /** Returns true when the alert was released for sending. */
+  private async decide(row: OutboxRow): Promise<boolean> {
     const profile = this.settings.getProfile(row.profileId);
 
     // The check was turned off (or the key removed) after this alert was queued.

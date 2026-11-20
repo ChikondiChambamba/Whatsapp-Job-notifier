@@ -8,3 +8,5 @@ logs/
 *.db-shm
 *.db-wal
 web-dist/
+desktop-dist/
+release/

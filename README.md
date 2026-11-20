@@ -11,6 +11,24 @@ A WhatsApp bot that watches chosen groups and channels and sends an alert when a
 
 Everything after that is managed in the app: alerts (word lists, sensitivity, which chats), groups and channels, and email settings. Each alert has a "Try it out" box and can be checked against the last 7 days of messages before saving.
 
+### Desktop app
+
+The desktop app wraps the same bot and interface in a window with a tray icon, so people who never open a terminal can use it.
+
+- `npm run desktop` builds everything and starts the desktop app from source.
+- `npm run dist:win` builds a Windows installer into `release/`. `npm run dist:mac` builds a macOS `.dmg` and has to run on a Mac.
+- Closing the window keeps the app running in the tray so alerts keep arriving. Quit from the tray menu.
+- It starts when the user signs in (set on first launch; untick "Start when I sign in" in the tray menu to stop that).
+- New matches show a desktop notification; bursts (for example after being offline) are grouped into one.
+- Data lives in the operating system's app-data folder (`%APPDATA%\WhatsApp Alerts` on Windows, `~/Library/Application Support/WhatsApp Alerts` on macOS): the database in `data/`, the WhatsApp session in `auth_session/`, and logs in `logs/`.
+- The email password and API key are encrypted in the database with a key protected by the operating system (Windows DPAPI / macOS Keychain). If that key cannot be unlocked, for example after moving the folder to another computer, the app asks for them again.
+
+Moving an existing setup into the desktop app: quit the desktop app, then copy `data/` and `auth_session/` from the project folder into the app-data folder above. Saved secrets are encrypted on the next start.
+
+Installers are unsigned. Windows shows "Windows protected your PC" (choose More info, then Run anyway), and macOS needs a right-click, Open the first time. Signing needs a code-signing certificate (Windows) or an Apple Developer account (macOS).
+
+The native SQLite module is rebuilt for Electron while packaging, and the scripts rebuild it for Node afterwards so `npm test` and `npm start` keep working.
+
 ### Developing the web app
 
 Run `npm run dev` for the API and `npm run web:dev` for the interface with hot reload at http://localhost:5173 (API requests are proxied to port 4000).

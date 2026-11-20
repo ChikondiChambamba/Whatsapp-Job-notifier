@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { profileSchema, type ProfileInput, type StoredProfile } from '../profiles/types.js';
 import { AI_MODELS, DEFAULT_AI_MODEL, type AiSettings } from './aiChecker.js';
 import { openDatabase, type Db } from './database.js';
+import { logger } from './logger.js';
+import { SecretBox, SecretUnavailableError } from './secretBox.js';
 
 export const emailSettingsSchema = z.object({
   smtpHost: z.string().trim().min(1, 'SMTP server is required'),
@@ -63,8 +65,53 @@ export class SettingsStore {
   private sourcesCache: Source[] | null = null;
   private profilesCache: StoredProfile[] | null = null;
 
-  constructor(dbPathOrConnection?: string | Db) {
+  constructor(
+    dbPathOrConnection?: string | Db,
+    private readonly secrets: SecretBox = SecretBox.none(),
+  ) {
     this.db = openDatabase(dbPathOrConnection);
+  }
+
+  /**
+   * Re-save secrets stored before encryption was available, so they are
+   * encrypted at rest. Returns how many were upgraded.
+   */
+  encryptStoredSecrets(): number {
+    if (!this.secrets.enabled) {
+      return 0;
+    }
+    let upgraded = 0;
+    for (const [key, field] of [
+      [EMAIL_KEY, 'smtpPass'],
+      [AI_KEY, 'apiKey'],
+    ] as const) {
+      const stored = this.getValue<Record<string, unknown>>(key);
+      const value = stored?.[field];
+      if (typeof value === 'string' && !SecretBox.isSealed(value)) {
+        this.setValue(key, { ...stored, [field]: this.secrets.seal(value) });
+        upgraded += 1;
+      }
+    }
+    return upgraded;
+  }
+
+  /** Read a settings object whose `field` is an encrypted secret. */
+  private getWithSecret(key: string, field: string): Record<string, unknown> | null {
+    const stored = this.getValue<Record<string, unknown>>(key);
+    const value = stored?.[field];
+    if (!stored || typeof value !== 'string') {
+      return stored;
+    }
+    try {
+      return { ...stored, [field]: this.secrets.open(value) };
+    } catch (error) {
+      if (error instanceof SecretUnavailableError) {
+        // Treated as "not set up" so the user is asked to enter it again.
+        logger.warn({ key, reason: error.message }, 'saved secret unavailable');
+        return null;
+      }
+      throw error;
+    }
   }
 
   // ---- generic key/value ----
@@ -95,26 +142,26 @@ export class SettingsStore {
   // ---- email ----
 
   getEmailSettings(): EmailSettings | null {
-    const parsed = emailSettingsSchema.safeParse(this.getValue(EMAIL_KEY));
+    const parsed = emailSettingsSchema.safeParse(this.getWithSecret(EMAIL_KEY, 'smtpPass'));
     return parsed.success ? parsed.data : null;
   }
 
   setEmailSettings(input: EmailSettingsInput): EmailSettings {
     const settings = emailSettingsSchema.parse(input);
-    this.setValue(EMAIL_KEY, settings);
+    this.setValue(EMAIL_KEY, { ...settings, smtpPass: this.secrets.seal(settings.smtpPass) });
     return settings;
   }
 
   // ---- AI ----
 
   getAiSettings(): AiSettings | null {
-    const parsed = aiSettingsSchema.safeParse(this.getValue(AI_KEY));
+    const parsed = aiSettingsSchema.safeParse(this.getWithSecret(AI_KEY, 'apiKey'));
     return parsed.success ? parsed.data : null;
   }
 
   setAiSettings(input: z.input<typeof aiSettingsSchema>): AiSettings {
     const settings = aiSettingsSchema.parse(input);
-    this.setValue(AI_KEY, settings);
+    this.setValue(AI_KEY, { ...settings, apiKey: this.secrets.seal(settings.apiKey) });
     return settings;
   }
 
