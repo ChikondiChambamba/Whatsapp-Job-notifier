@@ -1,11 +1,10 @@
 import { EventEmitter } from 'node:events';
-import type { RawVacancyMessage, VacancyPayload } from '../interfaces/payload.js';
+import type { IncomingMessage } from '../interfaces/payload.js';
 
 type ConnectionState = 'open' | 'close' | 'reconnecting';
 
 interface BotEvents {
-  'vacancy.raw': [RawVacancyMessage];
-  'vacancy.matched': [VacancyPayload, number];
+  'message.received': [IncomingMessage];
   'connection.state': [ConnectionState];
 }
 

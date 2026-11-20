@@ -1,19 +1,17 @@
-import { dirname } from 'node:path';
-import { mkdirSync } from 'node:fs';
-import Database from 'better-sqlite3';
-import { REQUIRED_FIELD_CATEGORIES, type SignalCategory } from '../config/keywords.js';
-
-const DEFAULT_DB_PATH = './data/seen_messages.db';
+import { openDatabase, type Db } from './database.js';
 
 export interface RecordScoreEventInput {
   messageId: string;
+  profileId: string;
   sourceJid: string;
   sourceName: string;
   sourceType: 'GROUP' | 'CHANNEL';
   score: number;
   matched: boolean;
   isLikelyBlast: boolean;
-  matchedCategories: SignalCategory[];
+  /** The profile's required-group check passed. */
+  eligible: boolean;
+  matchedCategories: string[];
   createdAt?: number;
 }
 
@@ -67,36 +65,10 @@ interface LastMessageRow {
 }
 
 export class StatsStore {
-  private readonly db: Database.Database;
+  private readonly db: Db;
 
-  constructor(dbPathOrConnection: string | Database.Database = DEFAULT_DB_PATH) {
-    if (typeof dbPathOrConnection === 'string') {
-      if (dbPathOrConnection !== ':memory:') {
-        mkdirSync(dirname(dbPathOrConnection), { recursive: true });
-      }
-      this.db = new Database(dbPathOrConnection);
-    } else {
-      this.db = dbPathOrConnection;
-    }
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS vacancy_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        message_id TEXT,
-        source_jid TEXT,
-        source_name TEXT,
-        source_type TEXT,
-        score REAL NOT NULL,
-        matched INTEGER NOT NULL,
-        is_likely_blast INTEGER NOT NULL,
-        matched_categories TEXT,
-        email_sent INTEGER,
-        email_error TEXT,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_vacancy_events_created_at
-        ON vacancy_events(created_at);
-    `);
+  constructor(dbPathOrConnection?: string | Db) {
+    this.db = openDatabase(dbPathOrConnection);
   }
 
   recordScoreEvent(input: RecordScoreEventInput): number {
@@ -105,6 +77,8 @@ export class StatsStore {
         `
           INSERT INTO vacancy_events (
             message_id,
+            profile_id,
+            eligible,
             source_jid,
             source_name,
             source_type,
@@ -114,11 +88,13 @@ export class StatsStore {
             matched_categories,
             created_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
         input.messageId,
+        input.profileId,
+        input.eligible ? 1 : 0,
         input.sourceJid,
         input.sourceName,
         input.sourceType.toLowerCase(),
@@ -154,17 +130,8 @@ export class StatsStore {
       [since],
     );
     const eligibleCount = this.count(
-      `
-        SELECT COUNT(*) AS count
-        FROM vacancy_events
-        WHERE created_at >= ?
-          AND EXISTS (
-            SELECT 1
-            FROM json_each(vacancy_events.matched_categories)
-            WHERE value IN (${REQUIRED_FIELD_CATEGORIES.map(() => '?').join(', ')})
-          )
-      `,
-      [since, ...REQUIRED_FIELD_CATEGORIES],
+      'SELECT COUNT(*) AS count FROM vacancy_events WHERE created_at >= ? AND eligible = 1',
+      [since],
     );
 
     const emailsSent = this.count(

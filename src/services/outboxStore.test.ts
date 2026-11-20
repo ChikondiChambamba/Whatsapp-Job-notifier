@@ -6,8 +6,10 @@ describe('OutboxStore', () => {
   it('marks seen and queues a pending vacancy in one call', () => {
     const store = new OutboxStore(new Database(':memory:'));
 
-    const outboxId = store.markSeenAndMaybeQueue('msg-1', {
+    const [outboxId] = store.markSeenAndQueue('msg-1', [{
       messageId: 'msg-1',
+      profileId: 'jobs',
+      profileName: 'Jobs',
       sourceJid: 'source@newsletter',
       sourceName: 'Source',
       sourceType: 'CHANNEL',
@@ -17,7 +19,7 @@ describe('OutboxStore', () => {
       matchedCategories: ['techRole', 'hiringVerb'],
       origin: 'live',
       statsEventId: 10,
-    });
+    }]);
 
     expect(outboxId).toBeGreaterThan(0);
     expect(store.hasSeen('msg-1')).toBe(true);
@@ -30,6 +32,8 @@ describe('OutboxStore', () => {
     const store = new OutboxStore(new Database(':memory:'));
     const outboxId = store.insertPending({
       messageId: 'msg-2',
+      profileId: 'jobs',
+      profileName: 'Jobs',
       sourceJid: 'source@newsletter',
       sourceName: 'Source',
       sourceType: 'CHANNEL',
@@ -48,6 +52,8 @@ describe('OutboxStore', () => {
 
     const expiredId = store.insertPending({
       messageId: 'msg-3',
+      profileId: 'jobs',
+      profileName: 'Jobs',
       sourceJid: 'source@newsletter',
       sourceName: 'Source',
       sourceType: 'CHANNEL',

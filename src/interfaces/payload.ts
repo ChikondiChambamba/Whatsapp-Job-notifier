@@ -1,6 +1,7 @@
 export type SourceType = 'GROUP' | 'CHANNEL';
 
-export interface RawVacancyMessage {
+/** A text message from a watched group or channel, before any rules run. */
+export interface IncomingMessage {
   messageId: string;
   sourceJid: string;
   sourceName: string;
@@ -11,7 +12,10 @@ export interface RawVacancyMessage {
   origin: 'live' | 'catchup';
 }
 
-export interface VacancyPayload extends RawVacancyMessage {
+/** A message that matched an alert profile and is ready to be sent. */
+export interface AlertPayload extends IncomingMessage {
+  profileId: string;
+  profileName: string;
   matchedKeywords: string[];
   score: number;
 }

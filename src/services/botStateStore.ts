@@ -1,39 +1,14 @@
-import { dirname } from 'node:path';
-import { mkdirSync } from 'node:fs';
-import Database from 'better-sqlite3';
-
-const DEFAULT_DB_PATH = './data/seen_messages.db';
+import { openDatabase, type Db } from './database.js';
 
 interface StateRow {
   value: string;
 }
 
 export class BotStateStore {
-  private readonly db: Database.Database;
+  private readonly db: Db;
 
-  constructor(dbPathOrConnection: string | Database.Database = DEFAULT_DB_PATH) {
-    if (typeof dbPathOrConnection === 'string') {
-      if (dbPathOrConnection !== ':memory:') {
-        mkdirSync(dirname(dbPathOrConnection), { recursive: true });
-      }
-      this.db = new Database(dbPathOrConnection);
-    } else {
-      this.db = dbPathOrConnection;
-    }
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS bot_state (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS downtime_windows (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        started_at INTEGER NOT NULL,
-        ended_at INTEGER NOT NULL,
-        recovered_count INTEGER NOT NULL DEFAULT 0
-      );
-    `);
+  constructor(dbPathOrConnection?: string | Db) {
+    this.db = openDatabase(dbPathOrConnection);
   }
 
   getNumber(key: string): number | null {

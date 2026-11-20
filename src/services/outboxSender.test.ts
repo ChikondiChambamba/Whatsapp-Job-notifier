@@ -12,12 +12,15 @@ describe('OutboxSender', () => {
     const statsStore = new StatsStore(db);
     const emailService = {
       sendDigest: vi.fn().mockResolvedValue(undefined),
-      sendVacancyAlert: vi.fn().mockResolvedValue(undefined),
+      sendAlert: vi.fn().mockResolvedValue(undefined),
+      isConfigured: () => true,
     };
 
     for (let i = 0; i < 3; i += 1) {
       outboxStore.insertPending({
         messageId: `msg-${i}`,
+        profileId: 'jobs',
+        profileName: 'Jobs',
         sourceJid: 'source@newsletter',
         sourceName: 'Source',
         sourceType: 'CHANNEL',
@@ -33,7 +36,7 @@ describe('OutboxSender', () => {
     await sender.drain();
 
     expect(emailService.sendDigest).toHaveBeenCalledTimes(1);
-    expect(emailService.sendVacancyAlert).not.toHaveBeenCalled();
+    expect(emailService.sendAlert).not.toHaveBeenCalled();
     expect(outboxStore.pendingRows()).toHaveLength(0);
 
     outboxStore.close();
@@ -45,7 +48,8 @@ describe('OutboxSender', () => {
     const statsStore = new StatsStore(db);
     const emailService = {
       sendDigest: vi.fn().mockResolvedValue(undefined),
-      sendVacancyAlert: vi.fn().mockResolvedValue(undefined),
+      sendAlert: vi.fn().mockResolvedValue(undefined),
+      isConfigured: () => true,
     };
 
     for (const [messageId, origin] of [
@@ -54,6 +58,8 @@ describe('OutboxSender', () => {
     ] as const) {
       outboxStore.insertPending({
         messageId,
+        profileId: 'jobs',
+        profileName: 'Jobs',
         sourceJid: 'source@newsletter',
         sourceName: 'Source',
         sourceType: 'CHANNEL',
@@ -73,8 +79,40 @@ describe('OutboxSender', () => {
     );
     await sender.drain();
 
-    expect(emailService.sendVacancyAlert).toHaveBeenCalledTimes(1);
+    expect(emailService.sendAlert).toHaveBeenCalledTimes(1);
     expect(outboxStore.pendingRows().map((row) => row.messageId)).toEqual(['catchup-1']);
+
+    outboxStore.close();
+  });
+
+  it('leaves rows pending while email is not set up', async () => {
+    const db = new Database(':memory:');
+    const outboxStore = new OutboxStore(db);
+    const statsStore = new StatsStore(db);
+    const emailService = {
+      sendDigest: vi.fn(),
+      sendAlert: vi.fn(),
+      isConfigured: () => false,
+    };
+    outboxStore.insertPending({
+      messageId: 'live-1',
+      profileId: 'jobs',
+      profileName: 'Jobs',
+      sourceJid: 'source@g.us',
+      sourceName: 'Source',
+      sourceType: 'GROUP',
+      text: 'We are hiring a backend developer.',
+      postedAt: Date.now(),
+      score: 5,
+      matchedCategories: ['techRole'],
+      origin: 'live',
+    });
+
+    const sender = new OutboxSender(outboxStore, emailService as unknown as EmailService, statsStore, 0);
+    await sender.drain();
+
+    expect(emailService.sendAlert).not.toHaveBeenCalled();
+    expect(outboxStore.pendingRows()).toHaveLength(1);
 
     outboxStore.close();
   });

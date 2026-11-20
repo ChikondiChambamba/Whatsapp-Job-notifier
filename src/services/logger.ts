@@ -1,6 +1,9 @@
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import pino from 'pino';
-mkdirSync('logs', { recursive: true });
+import { paths } from '../config/paths.js';
+
+mkdirSync(paths.logs, { recursive: true });
 
 export const logger = pino(
   {
@@ -8,7 +11,7 @@ export const logger = pino(
     redact: ['rawText', 'text'],
   },
   pino.destination({
-    dest: 'logs/bot.log',
+    dest: join(paths.logs, 'bot.log'),
     mkdir: true,
     sync: false,
   }),
@@ -17,7 +20,7 @@ export const logger = pino(
 export const scoreLogger = pino(
   { level: 'debug' },
   pino.destination({
-    dest: 'logs/scored-messages.log',
+    dest: join(paths.logs, 'scored-messages.log'),
     mkdir: true,
     sync: false,
   }),

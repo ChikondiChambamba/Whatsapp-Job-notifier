@@ -10,6 +10,8 @@ describe('StatsStore', () => {
 
     store.recordScoreEvent({
       messageId: 'old',
+      profileId: 'jobs',
+      eligible: true,
       sourceJid: 'old@g.us',
       sourceName: 'Old Group',
       sourceType: 'GROUP',
@@ -22,6 +24,8 @@ describe('StatsStore', () => {
 
     store.recordScoreEvent({
       messageId: 'eligible',
+      profileId: 'jobs',
+      eligible: true,
       sourceJid: 'source@g.us',
       sourceName: 'Tech Jobs',
       sourceType: 'GROUP',
@@ -34,6 +38,8 @@ describe('StatsStore', () => {
 
     store.recordScoreEvent({
       messageId: 'generic',
+      profileId: 'jobs',
+      eligible: false,
       sourceJid: 'source@g.us',
       sourceName: 'Tech Jobs',
       sourceType: 'GROUP',
@@ -46,6 +52,8 @@ describe('StatsStore', () => {
 
     const matchedEventId = store.recordScoreEvent({
       messageId: 'matched',
+      profileId: 'jobs',
+      eligible: true,
       sourceJid: 'channel@newsletter',
       sourceName: 'Channel Jobs',
       sourceType: 'CHANNEL',
@@ -60,6 +68,8 @@ describe('StatsStore', () => {
 
     const failedEventId = store.recordScoreEvent({
       messageId: 'failed-email',
+      profileId: 'jobs',
+      eligible: true,
       sourceJid: 'channel@newsletter',
       sourceName: 'Channel Jobs',
       sourceType: 'CHANNEL',

@@ -8,17 +8,27 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import { env } from '../config/env.js';
+import { paths } from '../config/paths.js';
 import { bus } from '../core/eventBus.js';
-import type { RawVacancyMessage, SourceType } from '../interfaces/payload.js';
-import { BotStateStore } from '../services/botStateStore.js';
+import type { IncomingMessage, SourceType } from '../interfaces/payload.js';
+import type { BotStateStore } from '../services/botStateStore.js';
 import { logger } from '../services/logger.js';
-import { OutboxSender } from '../services/outboxSender.js';
-import { OutboxStore } from '../services/outboxStore.js';
+import type { OutboxSender } from '../services/outboxSender.js';
+import type { OutboxStore } from '../services/outboxStore.js';
+import type { SettingsStore } from '../services/settingsStore.js';
 import { ChannelResolver } from './channelResolver.js';
 import { fetchNewsletterMessagesSince } from './newsletterMessages.js';
 
 const MAX_BACKOFF_MS = 60_000;
 const INITIAL_BACKOFF_MS = 1_000;
+
+export interface WhatsAppClientDeps {
+  settings: SettingsStore;
+  stateStore: BotStateStore;
+  outboxStore: OutboxStore;
+  outboxSender: Pick<OutboxSender, 'drain'>;
+  resolver?: ChannelResolver;
+}
 
 export class WhatsAppClient {
   private backoffMs = INITIAL_BACKOFF_MS;
@@ -26,18 +36,22 @@ export class WhatsAppClient {
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private acceptedSinceMs = Date.now() - env.CATCHUP_MAX_AGE_HOURS * 60 * 60 * 1000;
   private connectionOpenedAt = Date.now();
-  private readonly watchedJids = new Set([...env.WATCHED_GROUP_JIDS, ...env.WATCHED_CHANNEL_JIDS]);
-  private readonly watchedChannelInviteCodes = env.WATCHED_CHANNEL_LINKS.map(extractChannelInviteCode);
+  private readonly settings: SettingsStore;
+  private readonly stateStore: BotStateStore;
+  private readonly outboxStore: OutboxStore;
+  private readonly outboxSender: Pick<OutboxSender, 'drain'>;
+  private readonly resolver: ChannelResolver;
 
-  constructor(
-    private readonly stateStore = new BotStateStore(),
-    private readonly outboxStore = new OutboxStore(),
-    private readonly outboxSender = new OutboxSender(outboxStore),
-    private readonly resolver = new ChannelResolver(),
-  ) {}
+  constructor(deps: WhatsAppClientDeps) {
+    this.settings = deps.settings;
+    this.stateStore = deps.stateStore;
+    this.outboxStore = deps.outboxStore;
+    this.outboxSender = deps.outboxSender;
+    this.resolver = deps.resolver ?? new ChannelResolver();
+  }
 
   async start(): Promise<void> {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth_session');
+    const { state, saveCreds } = await useMultiFileAuthState(paths.authSession);
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
@@ -127,7 +141,7 @@ export class WhatsAppClient {
         continue;
       }
 
-      const payload = await this.toRawVacancyMessage(sock, message, this.originFor(message));
+      const payload = await this.toIncomingMessage(sock, message, this.originFor(message));
       if (payload) {
         logger.info(
           {
@@ -138,20 +152,20 @@ export class WhatsAppClient {
           },
           'watched message received',
         );
-        bus.emit('vacancy.raw', payload);
+        bus.emit('message.received', payload);
       }
     }
   }
 
-  private async toRawVacancyMessage(
+  private async toIncomingMessage(
     sock: WASocket,
     message: WAMessage,
     origin: 'live' | 'catchup',
-  ): Promise<RawVacancyMessage | null> {
+  ): Promise<IncomingMessage | null> {
     const sourceJid = message.key.remoteJid;
     const messageId = message.key.id;
 
-    if (!sourceJid || !messageId || !this.watchedJids.has(sourceJid)) {
+    if (!sourceJid || !messageId || !this.settings.isWatched(sourceJid)) {
       return null;
     }
 
@@ -225,7 +239,7 @@ export class WhatsAppClient {
   private acceptMessage(message: WAMessage): boolean {
     const sourceJid = message.key.remoteJid;
     const messageId = message.key.id;
-    if (!sourceJid || !messageId || !this.watchedJids.has(sourceJid)) {
+    if (!sourceJid || !messageId || !this.settings.isWatched(sourceJid)) {
       return false;
     }
 
@@ -237,10 +251,12 @@ export class WhatsAppClient {
   }
 
   private async resolveWatchedChannelLinks(sock: WASocket): Promise<void> {
-    for (const inviteCode of this.watchedChannelInviteCodes) {
+    for (const source of this.settings.unresolvedChannelLinks()) {
+      const inviteCode = extractChannelInviteCode(source.inviteLink ?? '');
       const jid = await this.resolver.resolveInvite(sock, inviteCode);
       if (jid) {
-        this.watchedJids.add(jid);
+        const name = await this.resolver.resolve(sock, jid);
+        this.settings.resolveChannelLink(source.id, jid, name === jid ? null : name);
         logger.info({ jid }, 'watched channel link resolved');
       } else {
         logger.warn({ inviteCode }, 'failed to resolve watched channel link');
@@ -278,9 +294,9 @@ export class WhatsAppClient {
           'newsletter catch-up fetched',
         );
         for (const message of accepted) {
-          const payload = await this.toRawVacancyMessage(sock, message, 'catchup');
+          const payload = await this.toIncomingMessage(sock, message, 'catchup');
           if (payload) {
-            bus.emit('vacancy.raw', payload);
+            bus.emit('message.received', payload);
           }
         }
       } catch (error) {
@@ -290,7 +306,7 @@ export class WhatsAppClient {
   }
 
   private channelJids(): string[] {
-    return Array.from(this.watchedJids).filter((jid) => jid.endsWith('@newsletter'));
+    return this.settings.watchedChannelJids();
   }
 }
 

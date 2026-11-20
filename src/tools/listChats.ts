@@ -1,12 +1,16 @@
 import makeWASocket, { useMultiFileAuthState, type WASocket } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import '../config/env.js';
-import { env } from '../config/env.js';
+import { paths } from '../config/paths.js';
+import { importLegacyEnv } from '../services/legacyImport.js';
+import { SettingsStore } from '../services/settingsStore.js';
 import { ChannelResolver } from '../whatsapp/channelResolver.js';
 
 const resolver = new ChannelResolver();
+const settings = new SettingsStore();
+importLegacyEnv(settings);
 
-const { state, saveCreds } = await useMultiFileAuthState('./auth_session');
+const { state, saveCreds } = await useMultiFileAuthState(paths.authSession);
 const sock = makeWASocket({
   auth: state,
   printQRInTerminal: false,
@@ -34,7 +38,7 @@ sock.ev.on('connection.update', (update) => {
 });
 
 async function listChats(sock: WASocket): Promise<void> {
-  console.log('\nGroups you can put in WATCHED_GROUP_JIDS:\n');
+  console.log('\nGroups this WhatsApp account belongs to (* = watched):\n');
 
   const groups = await sock.groupFetchAllParticipating();
   const groupList = Object.values(groups).sort((a, b) => a.subject.localeCompare(b.subject));
@@ -44,20 +48,25 @@ async function listChats(sock: WASocket): Promise<void> {
   }
 
   for (const group of groupList) {
-    console.log(`${group.subject} = ${group.id}`);
+    console.log(`${settings.isWatched(group.id) ? '*' : ' '} ${group.subject} = ${group.id}`);
   }
 
-  console.log('\nConfigured channel links resolved to WATCHED_CHANNEL_JIDS:\n');
+  console.log('\nWatched channels:\n');
 
-  if (env.WATCHED_CHANNEL_LINKS.length === 0) {
-    console.log('No WATCHED_CHANNEL_LINKS configured.');
+  const channels = settings.listSources().filter((source) => source.type === 'channel');
+  if (channels.length === 0) {
+    console.log('No channels watched.');
     return;
   }
 
-  for (const link of env.WATCHED_CHANNEL_LINKS) {
-    const inviteCode = extractChannelInviteCode(link);
+  for (const channel of channels) {
+    if (channel.jid) {
+      console.log(`${channel.name ?? channel.jid} = ${channel.jid}`);
+      continue;
+    }
+    const inviteCode = extractChannelInviteCode(channel.inviteLink ?? '');
     const jid = await resolver.resolveInvite(sock, inviteCode);
-    console.log(`${link} = ${jid || 'could not resolve'}`);
+    console.log(`${channel.inviteLink} = ${jid || 'could not resolve'}`);
   }
 }
 

@@ -1,3 +1,7 @@
+// Source data for the "Job vacancies" profile template (see templates.ts).
+// These are the original hard-coded rules; the template converts each RegExp
+// into a /regex/ term so existing matching behaviour is preserved exactly.
+
 export type SignalCategory =
   | 'techRole'
   | 'techSkill'
@@ -142,10 +146,3 @@ export const REQUIRED_FIELD_CATEGORIES: SignalCategory[] = [
   'civilRole',
   'civilSkill',
 ];
-
-// If 3+ of these list-style markers appear AND multiple distinct
-// non-target roles are named, the message is very likely a multi-vacancy
-// blast post (e.g. "1. Driver 2. Civil Engineer 3. Cashier") rather than
-// a single focused vacancy — see filterEngine's isLikelyBlast check.
-export const LIST_MARKER_PATTERN = /(?:^|\n)\s*(?:\d{1,2}[.)]|[-•▪●])\s+\S/gm;
-export const LIST_MARKER_BLAST_THRESHOLD = 3;

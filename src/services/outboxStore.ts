@@ -1,24 +1,21 @@
-import { dirname } from 'node:path';
-import { mkdirSync } from 'node:fs';
-import Database from 'better-sqlite3';
 import type { SourceType } from '../interfaces/payload.js';
-import type { SignalCategory } from '../config/keywords.js';
-
-const DEFAULT_DB_PATH = './data/seen_messages.db';
+import { openDatabase, type Db } from './database.js';
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type OutboxOrigin = 'live' | 'catchup';
 export type OutboxStatus = 'pending' | 'sent' | 'failed' | 'expired';
 
-export interface QueueVacancyInput {
+export interface QueueAlertInput {
   messageId: string;
+  profileId: string;
+  profileName: string;
   sourceJid: string;
   sourceName: string;
   sourceType: SourceType;
   text: string;
   postedAt: number;
   score: number;
-  matchedCategories: SignalCategory[];
+  matchedCategories: string[];
   origin: OutboxOrigin;
   statsEventId?: number;
 }
@@ -26,6 +23,8 @@ export interface QueueVacancyInput {
 export interface OutboxRow {
   id: number;
   messageId: string;
+  profileId: string;
+  profileName: string;
   sourceJid: string;
   sourceName: string | null;
   sourceType: 'group' | 'channel';
@@ -45,6 +44,8 @@ export interface OutboxRow {
 interface DbOutboxRow {
   id: number;
   message_id: string;
+  profile_id: string;
+  profile_name: string;
   source_jid: string;
   source_name: string | null;
   source_type: 'group' | 'channel';
@@ -66,47 +67,10 @@ interface CountRow {
 }
 
 export class OutboxStore {
-  private readonly db: Database.Database;
+  private readonly db: Db;
 
-  constructor(dbPathOrConnection: string | Database.Database = DEFAULT_DB_PATH) {
-    if (typeof dbPathOrConnection === 'string') {
-      if (dbPathOrConnection !== ':memory:') {
-        mkdirSync(dirname(dbPathOrConnection), { recursive: true });
-      }
-      this.db = new Database(dbPathOrConnection);
-    } else {
-      this.db = dbPathOrConnection;
-    }
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS seen_messages (
-        message_id TEXT PRIMARY KEY,
-        seen_at INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS vacancy_outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        message_id TEXT NOT NULL UNIQUE,
-        source_jid TEXT NOT NULL,
-        source_name TEXT,
-        source_type TEXT NOT NULL,
-        text TEXT NOT NULL,
-        posted_at INTEGER NOT NULL,
-        score REAL NOT NULL,
-        matched_categories TEXT,
-        origin TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        created_at INTEGER NOT NULL,
-        sent_at INTEGER,
-        stats_event_id INTEGER
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_outbox_status
-        ON vacancy_outbox(status, posted_at);
-    `);
-
+  constructor(dbPathOrConnection?: string | Db) {
+    this.db = openDatabase(dbPathOrConnection);
     this.pruneSent();
   }
 
@@ -122,23 +86,22 @@ export class OutboxStore {
       .run(messageId, seenAt);
   }
 
-  markSeenAndMaybeQueue(messageId: string, vacancy?: QueueVacancyInput): number | null {
+  /** Mark a message seen and queue one alert per matched profile, atomically. */
+  markSeenAndQueue(messageId: string, alerts: QueueAlertInput[] = []): number[] {
     return this.db.transaction(() => {
       this.markSeen(messageId);
-      if (!vacancy) {
-        return null;
-      }
-
-      return this.insertPending(vacancy);
+      return alerts.map((alert) => this.insertPending(alert));
     })();
   }
 
-  insertPending(input: QueueVacancyInput): number {
+  insertPending(input: QueueAlertInput): number {
     const result = this.db
       .prepare(
         `
-          INSERT OR IGNORE INTO vacancy_outbox (
+          INSERT OR IGNORE INTO alert_outbox (
             message_id,
+            profile_id,
+            profile_name,
             source_jid,
             source_name,
             source_type,
@@ -151,11 +114,13 @@ export class OutboxStore {
             created_at,
             stats_event_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
         `,
       )
       .run(
         input.messageId,
+        input.profileId,
+        input.profileName,
         input.sourceJid,
         input.sourceName,
         input.sourceType.toLowerCase(),
@@ -168,7 +133,8 @@ export class OutboxStore {
         input.statsEventId ?? null,
       );
 
-    return Number(result.lastInsertRowid);
+    // An ignored duplicate leaves lastInsertRowid pointing at an unrelated row.
+    return result.changes > 0 ? Number(result.lastInsertRowid) : 0;
   }
 
   pendingRows(): OutboxRow[] {
@@ -176,7 +142,7 @@ export class OutboxStore {
       .prepare(
         `
           SELECT *
-          FROM vacancy_outbox
+          FROM alert_outbox
           WHERE status = 'pending'
           ORDER BY posted_at ASC, id ASC
         `,
@@ -195,7 +161,7 @@ export class OutboxStore {
     this.db
       .prepare(
         `
-          UPDATE vacancy_outbox
+          UPDATE alert_outbox
           SET status = 'sent', sent_at = ?, last_error = NULL
           WHERE id IN (${placeholders})
         `,
@@ -207,7 +173,7 @@ export class OutboxStore {
     this.db
       .prepare(
         `
-          UPDATE vacancy_outbox
+          UPDATE alert_outbox
           SET status = 'expired', last_error = ?
           WHERE id = ?
         `,
@@ -219,7 +185,7 @@ export class OutboxStore {
     this.db
       .prepare(
         `
-          UPDATE vacancy_outbox
+          UPDATE alert_outbox
           SET attempts = attempts + 1,
               last_error = ?,
               status = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END
@@ -234,7 +200,7 @@ export class OutboxStore {
       .prepare(
         `
           SELECT COUNT(*) AS count
-          FROM vacancy_outbox
+          FROM alert_outbox
           WHERE origin = 'catchup' AND created_at >= ?
         `,
       )
@@ -245,7 +211,7 @@ export class OutboxStore {
 
   pruneSent(now = Date.now()): void {
     this.db
-      .prepare("DELETE FROM vacancy_outbox WHERE status = 'sent' AND sent_at < ?")
+      .prepare("DELETE FROM alert_outbox WHERE status = 'sent' AND sent_at < ?")
       .run(now - THIRTY_DAYS_MS);
   }
 
@@ -258,6 +224,8 @@ function mapRow(row: DbOutboxRow): OutboxRow {
   return {
     id: row.id,
     messageId: row.message_id,
+    profileId: row.profile_id,
+    profileName: row.profile_name,
     sourceJid: row.source_jid,
     sourceName: row.source_name,
     sourceType: row.source_type,

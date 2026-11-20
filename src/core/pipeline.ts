@@ -1,82 +1,105 @@
-import { bus } from './eventBus.js';
-import { FilterEngine } from '../services/filterEngine.js';
-import { StatsStore } from '../services/statsStore.js';
-import type { RawVacancyMessage } from '../interfaces/payload.js';
+import type { IncomingMessage } from '../interfaces/payload.js';
+import { RuleEngine } from '../profiles/ruleEngine.js';
 import { logger } from '../services/logger.js';
-import { OutboxStore } from '../services/outboxStore.js';
-import { OutboxSender } from '../services/outboxSender.js';
-import type { SignalCategory } from '../config/keywords.js';
+import type { OutboxSender } from '../services/outboxSender.js';
+import type { OutboxStore, QueueAlertInput } from '../services/outboxStore.js';
+import type { SettingsStore } from '../services/settingsStore.js';
+import type { StatsStore } from '../services/statsStore.js';
+import { bus } from './eventBus.js';
 
+export interface PipelineDeps {
+  settings: SettingsStore;
+  statsStore: StatsStore;
+  outboxStore: OutboxStore;
+  outboxSender: Pick<OutboxSender, 'drain'>;
+  engine?: RuleEngine;
+}
+
+/** Scores each incoming message against every profile watching its source. */
 export class MessagePipeline {
-  constructor(
-    private readonly filterEngine = new FilterEngine(),
-    private readonly statsStore = new StatsStore(),
-    private readonly outboxStore = new OutboxStore(),
-    private readonly outboxSender = new OutboxSender(outboxStore, undefined, statsStore),
-  ) {}
+  private readonly engine: RuleEngine;
+
+  constructor(private readonly deps: PipelineDeps) {
+    this.engine = deps.engine ?? new RuleEngine();
+  }
 
   start(): void {
-    bus.on('vacancy.raw', (message) => {
-      void this.process(message);
+    bus.on('message.received', (message) => {
+      try {
+        this.process(message);
+      } catch (error) {
+        logger.error({ error, messageId: message.messageId }, 'message processing failed');
+      }
     });
   }
 
-  async process(message: RawVacancyMessage): Promise<void> {
-    if (this.outboxStore.hasSeen(message.messageId)) {
+  /** Synchronous on purpose: the seen-check and mark-seen must not interleave. */
+  process(message: IncomingMessage): void {
+    const { settings, statsStore, outboxStore, outboxSender } = this.deps;
+
+    if (outboxStore.hasSeen(message.messageId)) {
       logger.debug({ messageId: message.messageId }, 'duplicate message ignored');
       return;
     }
 
-    const result = this.filterEngine.score(message.rawText);
-    const matchedCategories = Object.keys(result.categoryHits) as SignalCategory[];
-    const eventId = this.statsStore.recordScoreEvent({
-      messageId: message.messageId,
-      sourceJid: message.sourceJid,
-      sourceName: message.sourceName,
-      sourceType: message.sourceType,
-      score: result.score,
-      matched: result.matched,
-      isLikelyBlast: result.isLikelyBlast,
-      matchedCategories,
-    });
+    const profiles = settings.profilesForSource(message.sourceJid);
+    const alerts: QueueAlertInput[] = [];
 
-    const outboxId = this.outboxStore.markSeenAndMaybeQueue(
-      message.messageId,
-      result.matched
-        ? {
-            messageId: message.messageId,
-            sourceJid: message.sourceJid,
-            sourceName: message.sourceName,
-            sourceType: message.sourceType,
-            text: message.rawText,
-            postedAt: message.timestamp.getTime(),
-            score: result.score,
-            matchedCategories,
-            origin: message.origin,
-            statsEventId: eventId,
-          }
-        : undefined,
-    );
-
-    logger.info(
-      {
-        eventId,
-        outboxId,
+    for (const profile of profiles) {
+      const result = this.engine.score(profile, message.rawText);
+      const matchedCategories = Object.keys(result.categoryHits);
+      const eventId = statsStore.recordScoreEvent({
         messageId: message.messageId,
-        sourceType: message.sourceType,
+        profileId: profile.id,
+        sourceJid: message.sourceJid,
         sourceName: message.sourceName,
+        sourceType: message.sourceType,
         score: result.score,
         matched: result.matched,
-      },
-      'message scored',
-    );
+        isLikelyBlast: result.isLikelyBlast,
+        eligible: result.gatePassed,
+        matchedCategories,
+      });
 
-    if (!result.matched) {
-      return;
+      logger.info(
+        {
+          eventId,
+          messageId: message.messageId,
+          profileId: profile.id,
+          sourceName: message.sourceName,
+          score: result.score,
+          matched: result.matched,
+        },
+        'message scored',
+      );
+
+      if (result.matched) {
+        alerts.push({
+          messageId: message.messageId,
+          profileId: profile.id,
+          profileName: profile.name,
+          sourceJid: message.sourceJid,
+          sourceName: message.sourceName,
+          sourceType: message.sourceType,
+          text: message.rawText,
+          postedAt: message.timestamp.getTime(),
+          score: result.score,
+          matchedCategories,
+          origin: message.origin,
+          statsEventId: eventId,
+        });
+      }
     }
 
-    if (message.origin === 'live') {
-      void this.outboxSender.drain();
+    if (profiles.length === 0) {
+      logger.debug({ sourceJid: message.sourceJid }, 'no enabled profile watches this source');
+    }
+
+    outboxStore.markSeenAndQueue(message.messageId, alerts);
+
+    // Catch-up alerts are drained after the settle window (or by the periodic drain).
+    if (alerts.length > 0 && message.origin === 'live') {
+      void outboxSender.drain();
     }
   }
 }

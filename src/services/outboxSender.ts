@@ -1,20 +1,21 @@
 import { env } from '../config/env.js';
-import type { VacancyPayload } from '../interfaces/payload.js';
-import { EmailService } from './emailService.js';
+import type { AlertPayload } from '../interfaces/payload.js';
+import type { EmailService } from './emailService.js';
 import { logger } from './logger.js';
-import { OutboxStore, type OutboxRow } from './outboxStore.js';
-import { StatsStore } from './statsStore.js';
+import type { OutboxRow, OutboxStore } from './outboxStore.js';
+import type { StatsStore } from './statsStore.js';
 
 const SEND_SPACING_MS = 1500;
 
 export class OutboxSender {
   private draining = false;
   private periodicTimer: NodeJS.Timeout | undefined;
+  private warnedUnconfigured = false;
 
   constructor(
-    private readonly outboxStore = new OutboxStore(),
-    private readonly emailService = new EmailService(),
-    private readonly statsStore = new StatsStore(),
+    private readonly outboxStore: OutboxStore,
+    private readonly emailService: Pick<EmailService, 'sendAlert' | 'sendDigest' | 'isConfigured'>,
+    private readonly statsStore: StatsStore,
     private readonly catchupSettleMs = env.CATCHUP_SETTLE_MS,
   ) {}
 
@@ -55,6 +56,20 @@ export class OutboxSender {
 
   private async drainOnce(): Promise<void> {
     const rows = this.outboxStore.pendingRows();
+    if (rows.length === 0) {
+      return;
+    }
+
+    // Leave rows pending until email is set up; they expire after the max age.
+    if (!this.emailService.isConfigured()) {
+      if (!this.warnedUnconfigured) {
+        logger.warn({ pending: rows.length }, 'alerts waiting: email is not set up');
+        this.warnedUnconfigured = true;
+      }
+      return;
+    }
+    this.warnedUnconfigured = false;
+
     const maxAgeMs = env.CATCHUP_MAX_AGE_HOURS * 60 * 60 * 1000;
     const freshRows: OutboxRow[] = [];
 
@@ -110,7 +125,7 @@ export class OutboxSender {
 
   private async sendIndividual(row: OutboxRow, subjectPrefix?: string): Promise<void> {
     try {
-      await this.emailService.sendVacancyAlert(toPayload(row), { subjectPrefix });
+      await this.emailService.sendAlert(toPayload(row), { subjectPrefix });
       this.outboxStore.markSent([row.id]);
       recordStatsResult(this.statsStore, row, true);
       logger.info({ outboxId: row.id, messageId: row.messageId }, 'outbox email sent');
@@ -123,9 +138,11 @@ export class OutboxSender {
   }
 }
 
-function toPayload(row: OutboxRow): VacancyPayload {
+function toPayload(row: OutboxRow): AlertPayload {
   return {
     messageId: row.messageId,
+    profileId: row.profileId,
+    profileName: row.profileName,
     sourceJid: row.sourceJid,
     sourceName: row.sourceName || row.sourceJid,
     sourceType: row.sourceType === 'group' ? 'GROUP' : 'CHANNEL',

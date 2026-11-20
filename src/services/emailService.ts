@@ -1,8 +1,8 @@
 import nodemailer from 'nodemailer';
-import { env } from '../config/env.js';
-import type { VacancyPayload } from '../interfaces/payload.js';
+import type { AlertPayload } from '../interfaces/payload.js';
 import { logger } from './logger.js';
 import type { OutboxRow } from './outboxStore.js';
+import type { EmailSettings } from './settingsStore.js';
 
 const MAX_ATTEMPTS = 3;
 
@@ -11,51 +11,61 @@ export interface SendAlertOptions {
 }
 
 export class EmailService {
-  private readonly transporter: nodemailer.Transporter;
+  private transporter: nodemailer.Transporter | null = null;
+  private transporterKey = '';
 
-  constructor() {
-    this.transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_PORT === 465,
-      auth: {
-        user: env.SMTP_USER,
-        pass: env.SMTP_PASS,
-      },
-    });
+  /** Settings are read on every send so changes in the app apply immediately. */
+  constructor(private readonly getSettings: () => EmailSettings | null) {}
+
+  isConfigured(): boolean {
+    return this.getSettings() !== null;
   }
 
-  async sendVacancyAlert(payload: VacancyPayload, options: SendAlertOptions = {}): Promise<void> {
-    const subject = `${options.subjectPrefix ?? '[Job Alert]'} ${payload.sourceName}`;
-    const html = this.buildHtml(payload);
-
-    await this.withRetry(async () => {
-      await this.transporter.sendMail({
-        from: `"WhatsApp Vacancy Bot" <${env.SMTP_USER}>`,
-        to: env.ALERT_EMAIL_TO,
-        subject,
-        html,
-      });
-    }, payload.messageId);
+  async sendAlert(payload: AlertPayload, options: SendAlertOptions = {}): Promise<void> {
+    const subject = `${options.subjectPrefix ? `${options.subjectPrefix} ` : ''}[${payload.profileName}] ${payload.sourceName}`;
+    await this.send(subject, this.buildHtml(payload), payload.messageId);
   }
 
   async sendDigest(rows: OutboxRow[]): Promise<void> {
-    const subject = `Catch-up: ${rows.length} vacancies posted while the bot was offline`;
+    const subject = `Catch-up: ${rows.length} matches posted while the bot was offline`;
     const html = `
       <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5;">
         <h2>${escapeHtml(subject)}</h2>
         ${rows.map((row) => this.buildDigestEntry(row)).join('')}
       </div>
     `;
+    await this.send(subject, html, `digest-${Date.now()}`);
+  }
 
+  private async send(subject: string, html: string, messageId: string): Promise<void> {
+    const settings = this.getSettings();
+    if (!settings) {
+      throw new Error('Email alerts are not set up');
+    }
+
+    const transporter = this.transporterFor(settings);
     await this.withRetry(async () => {
-      await this.transporter.sendMail({
-        from: `"WhatsApp Vacancy Bot" <${env.SMTP_USER}>`,
-        to: env.ALERT_EMAIL_TO,
+      await transporter.sendMail({
+        from: `"${settings.fromName.replaceAll('"', '')}" <${settings.smtpUser}>`,
+        to: settings.to,
         subject,
         html,
       });
-    }, `digest-${Date.now()}`);
+    }, messageId);
+  }
+
+  private transporterFor(settings: EmailSettings): nodemailer.Transporter {
+    const key = JSON.stringify([settings.smtpHost, settings.smtpPort, settings.smtpUser, settings.smtpPass]);
+    if (!this.transporter || key !== this.transporterKey) {
+      this.transporter = nodemailer.createTransport({
+        host: settings.smtpHost,
+        port: settings.smtpPort,
+        secure: settings.smtpPort === 465,
+        auth: { user: settings.smtpUser, pass: settings.smtpPass },
+      });
+      this.transporterKey = key;
+    }
+    return this.transporter;
   }
 
   private async withRetry(action: () => Promise<void>, messageId: string): Promise<void> {
@@ -79,10 +89,10 @@ export class EmailService {
     throw lastError;
   }
 
-  private buildHtml(payload: VacancyPayload): string {
+  private buildHtml(payload: AlertPayload): string {
     return `
       <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5;">
-        <h2>New job vacancy detected</h2>
+        <h2>New match for "${escapeHtml(payload.profileName)}"</h2>
         <p><strong>Source:</strong> ${escapeHtml(payload.sourceName)} (${payload.sourceType})</p>
         <p><strong>Sender:</strong> ${escapeHtml(payload.sender)}</p>
         <p><strong>Score:</strong> ${payload.score}</p>
@@ -99,6 +109,7 @@ export class EmailService {
     return `
       <section style="border-top: 1px solid #ccc; padding: 14px 0;">
         <h3 style="margin: 0 0 8px;">${escapeHtml(row.sourceName || row.sourceJid)}</h3>
+        <p style="margin: 0 0 6px;"><strong>Alert:</strong> ${escapeHtml(row.profileName)}</p>
         <p style="margin: 0 0 6px;"><strong>Posted:</strong> ${escapeHtml(formatPostedAt(row.postedAt))}</p>
         <p style="margin: 0 0 6px;"><strong>Score:</strong> ${row.score}</p>
         <p style="margin: 0 0 10px;"><strong>Matched categories:</strong> ${escapeHtml(row.matchedCategories.join(', '))}</p>
