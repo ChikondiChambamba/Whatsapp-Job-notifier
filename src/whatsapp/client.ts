@@ -6,6 +6,7 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+import { rm } from 'node:fs/promises';
 import qrcode from 'qrcode-terminal';
 import { env } from '../config/env.js';
 import { paths } from '../config/paths.js';
@@ -21,6 +22,39 @@ import { fetchNewsletterMessagesSince } from './newsletterMessages.js';
 
 const MAX_BACKOFF_MS = 60_000;
 const INITIAL_BACKOFF_MS = 1_000;
+
+export type LinkState =
+  | 'starting'
+  | 'waiting_for_scan'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'logged_out';
+
+export interface WhatsAppStatus {
+  state: LinkState;
+  /** Raw QR payload while waiting for a scan. */
+  qr: string | null;
+  account: { jid: string; name: string | null } | null;
+  lastConnectedAt: number | null;
+}
+
+export interface GroupInfo {
+  jid: string;
+  name: string;
+  participants: number;
+}
+
+export interface ChannelInfo {
+  jid: string;
+  name: string;
+}
+
+export class NotConnectedError extends Error {
+  constructor() {
+    super('WhatsApp is not connected');
+  }
+}
 
 export interface WhatsAppClientDeps {
   settings: SettingsStore;
@@ -41,6 +75,15 @@ export class WhatsAppClient {
   private readonly outboxStore: OutboxStore;
   private readonly outboxSender: Pick<OutboxSender, 'drain'>;
   private readonly resolver: ChannelResolver;
+  private sock: WASocket | null = null;
+  private status: WhatsAppStatus = {
+    state: 'starting',
+    qr: null,
+    account: null,
+    lastConnectedAt: null,
+  };
+  /** Unwatched channels that delivered messages, offered as suggestions in the UI. */
+  private readonly seenChannels = new Map<string, number>();
 
   constructor(deps: WhatsAppClientDeps) {
     this.settings = deps.settings;
@@ -50,6 +93,90 @@ export class WhatsAppClient {
     this.resolver = deps.resolver ?? new ChannelResolver();
   }
 
+  getStatus(): WhatsAppStatus {
+    return { ...this.status };
+  }
+
+  async listGroups(): Promise<GroupInfo[]> {
+    const sock = this.connectedSock();
+    const groups = await sock.groupFetchAllParticipating();
+    return Object.values(groups)
+      .map((group) => ({
+        jid: group.id,
+        name: group.subject || group.id,
+        participants: group.size ?? group.participants?.length ?? 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Channels seen delivering messages that are not watched yet. */
+  async listSeenChannels(): Promise<ChannelInfo[]> {
+    const sock = this.connectedSock();
+    const channels: ChannelInfo[] = [];
+    for (const jid of this.seenChannels.keys()) {
+      if (!this.settings.isWatched(jid)) {
+        channels.push({ jid, name: await this.resolver.resolve(sock, jid) });
+      }
+    }
+    return channels;
+  }
+
+  /** Look up a channel invite link. Returns null if WhatsApp does not know it. */
+  async lookupChannelLink(link: string): Promise<ChannelInfo | null> {
+    const sock = this.connectedSock();
+    const jid = await this.resolver.resolveInvite(sock, extractChannelInviteCode(link));
+    if (!jid) {
+      return null;
+    }
+    return { jid, name: await this.resolver.resolve(sock, jid) };
+  }
+
+  /** Unlink this device. The session is wiped and a new QR code is shown. */
+  async logout(): Promise<void> {
+    const sock = this.sock;
+    if (!sock) {
+      await this.resetSession();
+      return;
+    }
+    try {
+      await sock.logout();
+    } catch (error) {
+      logger.warn({ error }, 'whatsapp logout request failed; resetting session locally');
+      await this.resetSession();
+    }
+  }
+
+  private connectedSock(): WASocket {
+    if (!this.sock || this.status.state !== 'connected') {
+      throw new NotConnectedError();
+    }
+    return this.sock;
+  }
+
+  private setStatus(update: Partial<WhatsAppStatus>): void {
+    this.status = { ...this.status, ...update };
+  }
+
+  private async resetSession(): Promise<void> {
+    this.stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    const previous = this.sock;
+    this.sock = null;
+    try {
+      previous?.end(undefined);
+    } catch {
+      // already closed
+    }
+    this.setStatus({ state: 'logged_out', qr: null, account: null });
+    await rm(paths.authSession, { recursive: true, force: true });
+    logger.warn('whatsapp session cleared; waiting for a new QR scan');
+    this.backoffMs = INITIAL_BACKOFF_MS;
+    await this.start();
+  }
+
   async start(): Promise<void> {
     const { state, saveCreds } = await useMultiFileAuthState(paths.authSession);
     const sock = makeWASocket({
@@ -57,18 +184,45 @@ export class WhatsAppClient {
       printQRInTerminal: false,
       getMessage: async () => undefined,
     });
+    this.sock = sock;
+    if (this.status.state !== 'logged_out') {
+      this.setStatus({ state: 'starting', qr: null });
+    }
+    // A saved session means this device is already linked, even before it connects.
+    // (creds.registered is only set by the pairing-code flow, so check `me`.)
+    const me = state.creds.me;
+    if (me && !this.status.account) {
+      this.setStatus({ account: { jid: me.id, name: me.name ?? null } });
+    }
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (update) => {
+      // Ignore late events from a socket that has been replaced.
+      if (sock !== this.sock) {
+        return;
+      }
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        logger.info('scan the WhatsApp QR code shown in the terminal');
-        qrcode.generate(qr, { small: true });
+        this.setStatus({ state: 'waiting_for_scan', qr });
+        logger.info('waiting for the WhatsApp QR code to be scanned');
+        if (process.stdout.isTTY) {
+          qrcode.generate(qr, { small: true });
+        }
+      }
+
+      if (connection === 'connecting' && this.status.state !== 'waiting_for_scan') {
+        this.setStatus({ state: 'connecting' });
       }
 
       if (connection === 'open') {
         const now = Date.now();
+        this.setStatus({
+          state: 'connected',
+          qr: null,
+          lastConnectedAt: now,
+          account: sock.user ? { jid: sock.user.id, name: sock.user.name ?? null } : null,
+        });
         const gapStart = this.stateStore.getNumber('last_online_at');
         this.connectionOpenedAt = now;
         this.acceptedSinceMs = computeCutoff(gapStart ?? now, now);
@@ -86,10 +240,14 @@ export class WhatsAppClient {
         const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
 
         if (statusCode === DisconnectReason.loggedOut) {
-          logger.error('whatsapp session logged out; delete auth_session and scan a new QR code');
-          process.exit(1);
+          logger.error('whatsapp session logged out');
+          void this.resetSession().catch((error: unknown) => {
+            logger.error({ error }, 'failed to restart after logout');
+          });
+          return;
         }
 
+        this.setStatus({ state: 'reconnecting', qr: null });
         this.scheduleReconnect();
       }
     });
@@ -131,6 +289,11 @@ export class WhatsAppClient {
     for (const message of messages) {
       if (message.key.fromMe) {
         continue;
+      }
+
+      const remoteJid = message.key.remoteJid;
+      if (remoteJid?.endsWith('@newsletter') && !this.settings.isWatched(remoteJid)) {
+        this.seenChannels.set(remoteJid, Date.now());
       }
 
       if (!this.acceptMessage(message)) {
@@ -195,6 +358,7 @@ export class WhatsAppClient {
 
   private async handleOpen(sock: WASocket, gapStart: number | null, openedAt: number): Promise<void> {
     await this.resolveWatchedChannelLinks(sock);
+    await this.nameUnnamedSources(sock);
     await this.subscribeWatchedChannels(sock);
 
     if (gapStart === null) {
@@ -260,6 +424,17 @@ export class WhatsAppClient {
         logger.info({ jid }, 'watched channel link resolved');
       } else {
         logger.warn({ inviteCode }, 'failed to resolve watched channel link');
+      }
+    }
+  }
+
+  /** Fill in display names for sources added by JID (e.g. imported from .env). */
+  private async nameUnnamedSources(sock: WASocket): Promise<void> {
+    for (const source of this.settings.unnamedSources()) {
+      const jid = source.jid as string;
+      const name = await this.resolver.resolve(sock, jid);
+      if (name !== jid) {
+        this.settings.addSource({ jid, name, type: source.type });
       }
     }
   }

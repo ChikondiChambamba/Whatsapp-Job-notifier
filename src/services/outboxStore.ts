@@ -152,6 +152,14 @@ export class OutboxStore {
     return rows.map(mapRow);
   }
 
+  /** Most recent alerts in any state, newest first. */
+  recentRows(limit = 50): OutboxRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM alert_outbox ORDER BY posted_at DESC, id DESC LIMIT ?')
+      .all(limit) as DbOutboxRow[];
+    return rows.map(mapRow);
+  }
+
   markSent(ids: number[], sentAt = Date.now()): void {
     if (ids.length === 0) {
       return;

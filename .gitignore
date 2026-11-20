@@ -7,3 +7,4 @@ logs/
 *.db
 *.db-shm
 *.db-wal
+web-dist/

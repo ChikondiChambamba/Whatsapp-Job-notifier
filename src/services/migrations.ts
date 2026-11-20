@@ -156,6 +156,21 @@ const MIGRATIONS: Migration[] = [
     ).run(LEGACY_PROFILE_ID, LEGACY_PROFILE_NAME);
     db.exec('DROP TABLE vacancy_outbox');
   },
+
+  // v3: short local buffer of watched messages, used to preview profile changes.
+  (db) => {
+    db.exec(`
+      CREATE TABLE recent_messages (
+        message_id TEXT PRIMARY KEY,
+        source_jid TEXT NOT NULL,
+        source_name TEXT,
+        text TEXT NOT NULL,
+        posted_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_recent_messages_posted_at ON recent_messages(posted_at);
+    `);
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

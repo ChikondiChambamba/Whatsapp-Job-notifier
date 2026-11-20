@@ -5,7 +5,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist/**', 'node_modules/**', 'auth_session/**', 'data/**'],
+    ignores: ['dist/**', 'web-dist/**', 'node_modules/**', 'auth_session/**', 'data/**'],
   },
   {
     files: ['src/**/*.ts'],
@@ -17,6 +17,21 @@ export default tseslint.config(
     },
     rules: {
       '@typescript-eslint/no-explicit-any': 'warn',
+      // Express identifies error handlers by their four parameters.
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    files: ['web/src/**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: {
+        project: './web/tsconfig.json',
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // Destructuring to drop fields is intentional.
+      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^_', destructuredArrayIgnorePattern: '^_' }],
     },
   },
 );

@@ -34,7 +34,11 @@ export function compileProfile(profile: Profile): CompiledProfile {
   };
 }
 
-export function scoreCompiled(compiled: CompiledProfile, text: string): ScoreResult {
+export function scoreCompiled(
+  compiled: CompiledProfile,
+  text: string,
+  options: { log?: boolean } = {},
+): ScoreResult {
   const { profile } = compiled;
   const categoryHits: Record<string, string[]> = {};
   let score = 0;
@@ -70,10 +74,12 @@ export function scoreCompiled(compiled: CompiledProfile, text: string): ScoreRes
   }
 
   const matched = gatePassed && score >= profile.threshold;
-  scoreLogger.debug(
-    { profileId: profile.id, score, matched, isLikelyBlast, text },
-    'scored message for profile',
-  );
+  if (options.log ?? true) {
+    scoreLogger.debug(
+      { profileId: profile.id, score, matched, isLikelyBlast, text },
+      'scored message for profile',
+    );
+  }
 
   return { matched, score, categoryHits, gatePassed, isLikelyBlast };
 }

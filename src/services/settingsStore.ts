@@ -110,6 +110,15 @@ export class SettingsStore {
     return this.listSources().some((source) => source.jid === jid);
   }
 
+  sourceName(jid: string): string | null {
+    return this.listSources().find((source) => source.jid === jid)?.name ?? null;
+  }
+
+  /** Watched sources whose display name is still unknown. */
+  unnamedSources(): Source[] {
+    return this.listSources().filter((source) => source.jid && !source.name);
+  }
+
   watchedChannelJids(): string[] {
     return this.listSources()
       .filter((source) => source.type === 'channel' && source.jid)

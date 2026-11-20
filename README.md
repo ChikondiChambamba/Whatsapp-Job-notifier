@@ -5,10 +5,21 @@ A WhatsApp bot that watches chosen groups and channels and sends an alert when a
 ## Setup
 
 1. Install Node.js 20 or newer.
-2. Run `npm install`.
-3. Start the bot with `npm run dev` and scan the QR code on first run.
+2. Run `npm install` and `npm run build`.
+3. Start the app with `npm start` (or `npm run dev` while developing).
+4. Open http://127.0.0.1:4000 and follow the setup: link WhatsApp by scanning the QR code, tick the groups and channels to watch, create an alert, and set up email.
 
-The browser setup screens arrive in the next phase. Until then, an existing `.env` (see "Upgrading from the .env setup") is the way to configure it.
+Everything after that is managed in the app: alerts (word lists, sensitivity, which chats), groups and channels, and email settings. Each alert has a "Try it out" box and can be checked against the last 7 days of messages before saving.
+
+### Developing the web app
+
+Run `npm run dev` for the API and `npm run web:dev` for the interface with hot reload at http://localhost:5173 (API requests are proxied to port 4000).
+
+### Privacy and security
+
+- The app only listens on 127.0.0.1. Requests with a non-local Host or Origin, and cross-site form posts, are rejected so other websites cannot read or change your settings.
+- Messages from watched chats are kept on this computer for 7 days (at most 2,000) to power the alert preview.
+- The email app password is stored in the local database and is never sent back to the browser.
 
 ## How matching works
 
@@ -37,7 +48,7 @@ Everything the bot writes lives under `APP_DATA_DIR` (default: the current folde
 
 - `APP_DATA_DIR`: folder for the database, WhatsApp session and logs. Defaults to the current folder.
 - `LOG_LEVEL`: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`.
-- `DASHBOARD_PORT`: local dashboard port. Defaults to `4000`.
+- `DASHBOARD_PORT`: port for the app's web interface. Defaults to `4000`.
 - `PROCESS_HISTORY_MESSAGES`: set to `true` to process recent WhatsApp history/backfill messages after reconnect.
 - `HEARTBEAT_INTERVAL_MS`: how often the bot records that WhatsApp is online. Defaults to `30000`.
 - `CATCHUP_MIN_GAP_MS`: minimum offline gap before catch-up runs. Defaults to `120000`.
@@ -48,17 +59,19 @@ Everything the bot writes lives under `APP_DATA_DIR` (default: the current folde
 
 ## Commands
 
-- `npm run dev`: run the bot with `tsx`.
+- `npm start`: run the built app (`npm run build` first).
+- `npm run dev`: run the bot from source with `tsx`.
+- `npm run web:dev`: run the web interface with hot reload (needs `npm run dev` running).
 - `npm run list:chats`: connect to WhatsApp and list your groups (watched ones marked `*`) and watched channels.
 - `npm run test:email`: send one test email using the saved email settings.
 - `npm run typecheck`: run strict TypeScript checks.
 - `npm run lint`: run ESLint.
 - `npm run test`: run unit tests.
-- `npm run build`: compile production JavaScript to `dist/`.
+- `npm run build`: compile the server to `dist/` and the web interface to `web-dist/`.
 
-## Dashboard
+## Running on a server
 
-The bot starts a local KPI dashboard on `127.0.0.1:4000` by default. On a VPS, view it through an SSH tunnel:
+The web interface only listens on 127.0.0.1. On a VPS, open it through an SSH tunnel:
 
 ```bash
 ssh -L 4000:localhost:4000 <user>@<vps-host>

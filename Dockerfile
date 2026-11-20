@@ -6,7 +6,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY dist ./dist
-COPY public ./public
+COPY web-dist ./web-dist
 
 VOLUME ["/app/auth_session", "/app/data"]
 EXPOSE 4000

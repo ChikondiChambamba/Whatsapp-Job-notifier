@@ -13,6 +13,6 @@ export const paths = {
   database: join(dataRoot, 'data', 'seen_messages.db'),
   authSession: join(dataRoot, 'auth_session'),
   logs: join(dataRoot, 'logs'),
-  /** Bundled static files, resolved relative to this module (works from src/ and dist/). */
-  dashboardStatic: fileURLToPath(new URL('../../public/dashboard', import.meta.url)),
+  /** Built web UI, resolved relative to this module (works from src/ and dist/). */
+  webStatic: fileURLToPath(new URL('../../web-dist', import.meta.url)),
 };

@@ -3,6 +3,7 @@ import { RuleEngine } from '../profiles/ruleEngine.js';
 import { logger } from '../services/logger.js';
 import type { OutboxSender } from '../services/outboxSender.js';
 import type { OutboxStore, QueueAlertInput } from '../services/outboxStore.js';
+import type { RecentMessagesStore } from '../services/recentMessagesStore.js';
 import type { SettingsStore } from '../services/settingsStore.js';
 import type { StatsStore } from '../services/statsStore.js';
 import { bus } from './eventBus.js';
@@ -12,6 +13,7 @@ export interface PipelineDeps {
   statsStore: StatsStore;
   outboxStore: OutboxStore;
   outboxSender: Pick<OutboxSender, 'drain'>;
+  recentMessages?: RecentMessagesStore;
   engine?: RuleEngine;
 }
 
@@ -35,12 +37,20 @@ export class MessagePipeline {
 
   /** Synchronous on purpose: the seen-check and mark-seen must not interleave. */
   process(message: IncomingMessage): void {
-    const { settings, statsStore, outboxStore, outboxSender } = this.deps;
+    const { settings, statsStore, outboxStore, outboxSender, recentMessages } = this.deps;
 
     if (outboxStore.hasSeen(message.messageId)) {
       logger.debug({ messageId: message.messageId }, 'duplicate message ignored');
       return;
     }
+
+    recentMessages?.add({
+      messageId: message.messageId,
+      sourceJid: message.sourceJid,
+      sourceName: message.sourceName,
+      text: message.rawText,
+      postedAt: message.timestamp.getTime(),
+    });
 
     const profiles = settings.profilesForSource(message.sourceJid);
     const alerts: QueueAlertInput[] = [];

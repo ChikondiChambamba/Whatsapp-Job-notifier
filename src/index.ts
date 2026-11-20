@@ -1,6 +1,5 @@
 import './config/env.js';
 import { MessagePipeline } from './core/pipeline.js';
-import { startDashboardServer } from './dashboard/server.js';
 import { BotStateStore } from './services/botStateStore.js';
 import { openDatabase } from './services/database.js';
 import { EmailService } from './services/emailService.js';
@@ -11,6 +10,9 @@ import { OutboxStore } from './services/outboxStore.js';
 import { SettingsStore } from './services/settingsStore.js';
 import { StatsStore } from './services/statsStore.js';
 import { WhatsAppClient } from './whatsapp/client.js';
+import { paths } from './config/paths.js';
+import { RecentMessagesStore } from './services/recentMessagesStore.js';
+import { startServer } from './server/server.js';
 
 process.on('uncaughtException', (error) => {
   logger.error({ error }, 'uncaught exception');
@@ -29,9 +31,9 @@ const outboxStore = new OutboxStore(db);
 const botStateStore = new BotStateStore(db);
 const emailService = new EmailService(() => settings.getEmailSettings());
 const outboxSender = new OutboxSender(outboxStore, emailService, statsStore);
+const recentMessages = new RecentMessagesStore(db);
 
-new MessagePipeline({ settings, statsStore, outboxStore, outboxSender }).start();
-startDashboardServer(statsStore);
+new MessagePipeline({ settings, statsStore, outboxStore, outboxSender, recentMessages }).start();
 void outboxSender.drain();
 outboxSender.startPeriodicDrain();
 
@@ -55,6 +57,31 @@ process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
 
 const client = new WhatsAppClient({ settings, stateStore: botStateStore, outboxStore, outboxSender });
+
+startServer({
+  settings,
+  statsStore,
+  outboxStore,
+  recentMessages,
+  whatsapp: client,
+  sendTestEmail: (emailSettings) =>
+    new EmailService(() => emailSettings).sendAlert({
+      messageId: `test-${Date.now()}`,
+      profileId: 'test',
+      profileName: 'Test',
+      sourceJid: 'test',
+      sourceName: 'Test email',
+      sourceType: 'GROUP',
+      sender: 'test',
+      rawText: 'Your email alerts are working. Matching WhatsApp messages will arrive like this.',
+      matchedKeywords: [],
+      score: 0,
+      timestamp: new Date(),
+      origin: 'live',
+    }),
+  webRoot: paths.webStatic,
+});
+
 void client.start().catch((error: unknown) => {
   logger.error({ error }, 'failed to start whatsapp client');
   process.exitCode = 1;
